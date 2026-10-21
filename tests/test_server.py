@@ -1240,6 +1240,25 @@ class TestToolRegistration:
         missing = expected_new_tools - registered_names
         assert not missing, f"Herramientas no registradas en FastMCP: {missing}"
 
+    @pytest.mark.asyncio
+    async def test_tool_annotations_for_claude_permissions(self):
+        """Verifica que todas las herramientas tienen anotaciones de solo lectura o destructivas."""
+        tools = await server.mcp.list_tools()
+        assert len(tools) == 47
+        read_count = 0
+        write_count = 0
+        for t in tools:
+            assert hasattr(t, "annotations") and t.annotations is not None, f"Herramienta {t.name} sin anotaciones"
+            assert t.annotations.read_only_hint in (True, False), f"Herramienta {t.name} sin read_only_hint definido"
+            if t.annotations.read_only_hint:
+                read_count += 1
+                assert t.annotations.destructive_hint is False
+            else:
+                write_count += 1
+                assert t.annotations.destructive_hint is True
+        assert read_count == 32
+        assert write_count == 15
+
 
 class TestCheckCumulusConnection:
     """Pruebas para la comprobación inicial de conectividad con CumulusMX."""

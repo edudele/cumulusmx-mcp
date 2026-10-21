@@ -25,6 +25,7 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Health check** — unauthenticated `/health` endpoint for Docker and monitoring orchestrators.
 - **Bearer token auth** — all MCP endpoints require `Authorization: Bearer ***`.
 - **Prefix stripping** — configurable middleware for reverse proxies that don't rewrite paths.
+- **MCP Tool Annotations** — full `readOnlyHint` and `destructiveHint` annotations for client permission grouping (read-only vs write/delete in Claude and other clients).
 
 ---
 

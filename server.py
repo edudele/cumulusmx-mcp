@@ -92,6 +92,10 @@ _client: httpx.AsyncClient | None = None
 
 WRITE_DISABLED_MSG = "Error: Las operaciones de modificación/escritura están deshabilitadas en la configuración (ENABLE_WRITE_TOOLS=false)."
 
+# Anotaciones MCP para categorización de permisos en clientes (Claude, etc.)
+READ_ONLY = {"readOnlyHint": True, "destructiveHint": False}
+WRITE_ACTION = {"readOnlyHint": False, "destructiveHint": True}
+
 
 def _check_write_enabled() -> str | None:
     val = os.environ.get("ENABLE_WRITE_TOOLS", "true").strip().lower()
@@ -256,19 +260,19 @@ def _today() -> datetime.date:
 
 # ---------------------------------------------------------------- tools básicas ----
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def ping() -> str:
     """Comprueba que el MCP responde."""
     return "pong"
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def current_data() -> str:
     """Condiciones actuales completas de la estación (JSON): temperatura, humedad, viento, lluvia, presión, etc."""
     return await _get("/api/data/currentdata")
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def get_tags(tags: list[str]) -> str:
     """Valores de webtags de CumulusMX (p.ej. ['temp','hum','press','wlatest']). Devuelve JSON {tag: valor}."""
     if not tags or len(tags) > 50 or not all(TAG_RE.match(t) for t in tags):
@@ -276,13 +280,13 @@ async def get_tags(tags: list[str]) -> str:
     return await _get("/api/tags/process.json?" + "&".join(tags))
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def today_yesterday(kind: Literal["temp", "hum", "rain", "wind", "pressure", "solar"]) -> str:
     """Valores de hoy y ayer para una magnitud."""
     return await _get(f"/api/todayyest/{kind}.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def graph_data(name: str, start: str = "", end: str = "") -> str:
     """Serie temporal para gráficos. name: tempdata, winddata, raindata, pressdata, humdata, solardata,
     wdirdata, dailyrain, sunhours, dailytemp, units, availabledata...
@@ -298,7 +302,7 @@ async def graph_data(name: str, start: str = "", end: str = "") -> str:
     return await _get(f"/api/graphdata/{name}.json", params)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def daily_graph_data(name: str) -> str:
     """Series diarias: tempdata, winddata, raindata, pressdata, humdata, solardata, degdaydata, tempsumdata, chillhrsdata..."""
     if not re.fullmatch(r"[a-z0-9]{3,30}", name):
@@ -306,7 +310,7 @@ async def daily_graph_data(name: str) -> str:
     return await _get(f"/api/dailygraphdata/{name}.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def records(scope: Literal["alltime", "thismonth", "thisyear", "month"],
                   kind: Literal["temperature", "humidity", "pressure", "wind", "rain"],
                   month: int = 0) -> str:
@@ -318,7 +322,7 @@ async def records(scope: Literal["alltime", "thismonth", "thisyear", "month"],
     return await _get(f"/api/records/{scope}/{kind}.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def records_period(startdate: str, enddate: str) -> str:
     """Récords calculados para un periodo específico (yyyy-mm-dd). Años permitidos: 2000-2050."""
     for d, n in ((startdate, "startdate"), (enddate, "enddate")):
@@ -331,7 +335,7 @@ async def records_period(startdate: str, enddate: str) -> str:
     return await _get("/api/records/thisperiod", {"startdate": startdate, "enddate": enddate})
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def dayfile(start: int = 0, length: int = 31, search: str = "") -> str:
     """Resumen diario histórico (dayfile), paginado. length máx. 500."""
     length = max(1, min(length, 500))
@@ -339,13 +343,13 @@ async def dayfile(start: int = 0, length: int = 31, search: str = "") -> str:
                                             "search[value]": search[:100]})
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def station_info(kind: Literal["version", "units", "alarms", "snowinfo", "timeformat", "wsport", "displaylangs"]) -> str:
     """Información de la estación: versión, unidades, alarmas..."""
     return await _get(f"/api/info/{kind}.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def noaa_report(period: Literal["noaayear", "noaamonth"], year: int, month: int = 1) -> str:
     """Informe NOAA anual o mensual en texto."""
     if not 2000 <= year <= 2050 or not 1 <= month <= 12:
@@ -636,7 +640,7 @@ def compute_year_records(rows: list[dict], year: int, today: datetime.date) -> d
 
 # ---------------------------------------------------------------- tools avanzadas ----
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def dayfile_range(start: str, end: str, columns: list[str] | None = None, max_rows: int = 400, summary_only: bool = False) -> str:
     """Resumen diario (dayfile) entre dos fechas yyyy-mm-dd, con nombres de columna legibles y soporte de alias.
     columns: lista opcional de columnas o alias (ej. ['date', 'MinTemp', 'MaxTemp', 'Rain', 'Wind', 'temp_min']).
@@ -654,7 +658,7 @@ async def dayfile_range(start: str, end: str, columns: list[str] | None = None, 
     return json.dumps([{c: r.get(c) for c in cols} for r in limited], ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def climate_summary(start: str, end: str) -> str:
     """Estadísticas agregadas del periodo [start, end] (yyyy-mm-dd) calculadas del histórico diario:
     temperatura máxima/mínima absoluta con fecha, media, lluvia total, días de lluvia, día más lluvioso,
@@ -666,7 +670,7 @@ async def climate_summary(start: str, end: str) -> str:
     return json.dumps(_agg(rows), ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def monthly_summary(year: int) -> str:
     """Resumen mes a mes de un año (temperaturas extremas y media, lluvia, días de lluvia, racha, horas de sol)."""
     if not 2000 <= year <= 2050:
@@ -680,7 +684,7 @@ async def monthly_summary(year: int) -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def compare_periods(start_a: str, end_a: str, start_b: str, end_b: str) -> str:
     """Compara dos periodos (yyyy-mm-dd) con las mismas estadísticas que climate_summary
     (p.ej. este octubre vs. octubre del año pasado)."""
@@ -692,7 +696,7 @@ async def compare_periods(start_a: str, end_a: str, start_b: str, end_b: str) ->
     return json.dumps(res, ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def graph_summary(name: str, start: str = "", end: str = "", points: int = 0) -> str:
     """Resumen estadístico de una serie de gráfica (mín, máx, media, último valor, con hora ISO) en vez de miles de puntos.
     name: tempdata, winddata, raindata, pressdata, humdata, solardata, wdirdata, o intvtemp, intvwind, intvrain,
@@ -724,7 +728,7 @@ async def graph_summary(name: str, start: str = "", end: str = "", points: int =
     return json.dumps(out, ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def rankings(
     variable: Literal["temp_min", "temp_max", "lluvia_total", "racha_max", "temp_media", "horas_sol"],
     top: int = 10,
@@ -760,7 +764,7 @@ async def rankings(
     return json.dumps(res, ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def year_records(year: int) -> str:
     """Récords y estadísticas anuales a partir del dayfile del año indicado.
     Devuelve JSON con las temperaturas extremas absolutas, racha máxima, precipitación acumulada,
@@ -775,7 +779,7 @@ async def year_records(year: int) -> str:
     return json.dumps(res, ensure_ascii=False)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def today_all(strip_html: bool = True) -> str:
     """Hoy vs ayer de TODAS las magnitudes (temp, hum, rain, wind, pressure, solar) en una sola llamada."""
     res = {}
@@ -786,7 +790,7 @@ async def today_all(strip_html: bool = True) -> str:
     return _clean(s) if strip_html else s
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def records_all(scope: Literal["alltime", "thismonth", "thisyear", "month"],
                       month: int = 0,
                       strip_html: bool = True) -> str:
@@ -808,7 +812,7 @@ async def records_all(scope: Literal["alltime", "thismonth", "thisyear", "month"
     return _clean(s) if strip_html else s
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def snapshot() -> str:
     """Foto rápida de la estación: temperatura, sensación, humedad, rocío, presión y tendencia, viento/racha/dirección,
     lluvia (hoy/mes/año/tasa), sol/UV, extremos de hoy, amanecer/atardecer, luna y estado de la estación."""
@@ -819,7 +823,7 @@ async def snapshot() -> str:
     return await _get("/api/tags/process.json?" + "&".join(tags))
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def render_template(template: str) -> str:
     """Evalúa una plantilla de webtags con modificadores, p.ej.
     '<#temp dp=2> <#tempH> <#time format="HH:mm"> <#RecentOutsideTemp d=1>'. Solo se admiten etiquetas <#nombre ...> y texto simple."""
@@ -830,7 +834,7 @@ async def render_template(template: str) -> str:
     return await _post("/api/tags/process.txt", content=template.encode(), headers={"Content-Type": "text/plain"})
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def logfile(start: str, end: str, offset: int = 0, length: int = 100, extra: bool = False) -> str:
     """Log de intervalo (datos cada pocos minutos) entre dos fechas yyyy-mm-dd, paginado (length máx 300).
     extra=True para el log de sensores extra."""
@@ -842,14 +846,14 @@ async def logfile(start: str, end: str, offset: int = 0, length: int = 100, extr
     return await _get("/api/data/extralogfile" if extra else "/api/data/logfile", p)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def recent_data(offset: int = 0, length: int = 100) -> str:
     """Tabla de datos recientes de la estación (últimas horas), paginada (length máx 300)."""
     return await _get("/api/data/recentdata", {"draw": 1, "start": max(0, offset),
                                                "length": max(1, min(length, 300)), "search[value]": ""})
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def diary(date: str = "") -> str:
     """Diario meteorológico: si das date (yyyy-mm-dd) devuelve esa entrada; sin fecha, el resumen de días con anotación."""
     if date:
@@ -865,7 +869,7 @@ ALLOWED_GET = re.compile(
     r"|reports/[a-z0-9]+)$")
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def api_get(path: str, query: dict[str, str] | None = None) -> str:
     """Acceso genérico de SOLO LECTURA a endpoints GET de CumulusMX por lista blanca (p.ej. path='/api/extra/xyz').
     Prohibido: settings, utils, genreports, uploadreport, mysqlcache, errorlog, station/*."""
@@ -875,7 +879,7 @@ async def api_get(path: str, query: dict[str, str] | None = None) -> str:
     return await _get(path, q or None)
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def server_status() -> str:
     """Diagnóstico: comprueba que CumulusMX responde y devuelve su versión."""
     ver = await _get("/api/info/version.json")
@@ -892,7 +896,7 @@ ALL_ALARMS = (
 )
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def reloaddayfile() -> str:
     """Fuerza a CumulusMX a recargar dayfile.txt desde el disco e invalida la caché local en memoria."""
     if (err := _check_write_enabled()):
@@ -905,7 +909,7 @@ async def reloaddayfile() -> str:
     return f"Caché local de dayfile invalidada. CumulusMX: {res}"
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def clear_alarms(alarm: str = "all") -> str:
     """Restablece una alarma específica (p.ej. 'BatteryLow', 'AlarmSensor') o todas las alarmas en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -923,7 +927,7 @@ async def clear_alarms(alarm: str = "all") -> str:
         return await _post("/api/utils/clearalarm.txt", content=alarm_id.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def clear_error_log() -> str:
     """Borra el registro de errores acumulado en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -931,7 +935,7 @@ async def clear_error_log() -> str:
     return await _post("/api/utils/clearerrorlog.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def trigger_ftp(
     dailygraphs: bool = False,
     noaa: bool = False,
@@ -950,7 +954,7 @@ async def trigger_ftp(
     return await _post("/api/utils/ftpnow.json", content=payload, headers={"Content-Type": "application/json"})
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def purgemysql() -> str:
     """Purga la cola de comandos pendientes/fallidos y la caché MySQL en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -960,7 +964,7 @@ async def purgemysql() -> str:
 
 # ---------------------------------------------------------------- informes ----
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def generate_reports(
     report_type: Literal["year", "month"] = "month",
     year: int | None = None,
@@ -985,7 +989,7 @@ async def generate_reports(
         raise ValueError("report_type debe ser 'year' o 'month'")
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def upload_reports(
     report_type: Literal["year", "month"] = "month",
     year: int | None = None,
@@ -1012,7 +1016,7 @@ async def upload_reports(
 
 # ---------------------------------------------------------------- diagnóstico ----
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def get_error_log() -> str:
     """Obtiene el registro de errores y avisos del sistema en CumulusMX."""
     return await _get("/api/data/errorlog.json")
@@ -1020,7 +1024,7 @@ async def get_error_log() -> str:
 
 # ---------------------------------------------------------------- edición ----
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def edit_current_conditions(text: str) -> str:
     """Actualiza el texto descriptivo de las condiciones meteorológicas actuales de la estación."""
     if (err := _check_write_enabled()):
@@ -1032,7 +1036,7 @@ async def edit_current_conditions(text: str) -> str:
     )
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def edit_rain_today(raintoday: float, midnightrain: float | None = None) -> str:
     """Modifica los valores acumulados de lluvia de hoy y lluvia desde medianoche en la estación."""
     if (err := _check_write_enabled()):
@@ -1050,7 +1054,7 @@ async def edit_rain_today(raintoday: float, midnightrain: float | None = None) -
     return await _post("/api/edit/raintoday", data=data)
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def edit_diary(
     date: str,
     entry: str = "",
@@ -1080,7 +1084,7 @@ async def edit_diary(
     return await _post("/api/edit/diarydata", content=json.dumps(payload), headers={"Content-Type": "application/json"})
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def delete_diary(date: str) -> str:
     """Elimina la entrada del diario meteorológico para una fecha específica (yyyy-mm-dd)."""
     if (err := _check_write_enabled()):
@@ -1092,13 +1096,13 @@ async def delete_diary(date: str) -> str:
 
 # ---------------------------------------------------------------- configuración ----
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def get_station_settings() -> str:
     """Obtiene la configuración actual de la estación meteorológica en CumulusMX."""
     return await _get("/api/settings/stationdata.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def update_station_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza la configuración de la estación meteorológica en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1121,13 +1125,13 @@ async def update_station_settings(settings: dict[str, Any] | str) -> str:
     )
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def get_calibration_settings() -> str:
     """Obtiene los factores de calibración y offsets actuales de los sensores en CumulusMX."""
     return await _get("/api/settings/calibrationdata.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def update_calibration_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza los factores y offsets de calibración de los sensores en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1150,7 +1154,7 @@ async def update_calibration_settings(settings: dict[str, Any] | str) -> str:
     )
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def get_alarm_settings() -> str:
     """Obtiene la configuración actual de alarmas y umbrales en CumulusMX."""
     res = await _get("/api/settings/alarms.json")
@@ -1159,7 +1163,7 @@ async def get_alarm_settings() -> str:
     return res
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def update_alarm_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza la configuración de alarmas y umbrales en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1190,13 +1194,13 @@ async def update_alarm_settings(settings: dict[str, Any] | str) -> str:
     )
 
 
-@mcp.tool
+@mcp.tool(annotations=READ_ONLY)
 async def get_noaa_settings() -> str:
     """Obtiene la configuración de generación de informes NOAA en CumulusMX."""
     return await _get("/api/settings/noaadata.json")
 
 
-@mcp.tool
+@mcp.tool(annotations=WRITE_ACTION)
 async def test_email(
     from_email: str,
     dest_email: str,
