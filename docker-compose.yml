@@ -1,0 +1,22 @@
+# Añade el servicio "mcp" a tu stack de CumulusMX (o usa este fichero como base).
+services:
+  cumulusmx:
+    image: TU_IMAGEN_CUMULUSMX     # <- la que ya usas
+    restart: unless-stopped
+    networks: [internal]
+    # SIN "ports:" -> CumulusMX no se publica; solo accesible como http://cumulusmx:8998
+
+  mcp:
+    build: .
+    restart: unless-stopped
+    environment:
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?define MCP_AUTH_TOKEN en .env}
+      CUMULUSMX_URL: http://cumulusmx:8998
+      PORT: "8000"
+    ports:
+      - "8000:8000"                # único puerto publicado
+    depends_on: [cumulusmx]
+    networks: [internal]
+
+networks:
+  internal: {}
