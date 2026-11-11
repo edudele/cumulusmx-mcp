@@ -15,6 +15,7 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Current conditions** — temperature, humidity, pressure, wind, rain, solar/UV in real time.
 - **Today / yesterday** — highs, lows and times for all variables.
 - **Historical data & Analytics** — daily summaries from dayfile across all years, flexible column alias filtering (`date`, `mintemp`, `rain`, etc.) and aggregated statistical summaries (`summary_only`).
+- **Climate analytics** — `count_days`, `find_streaks`, `anomaly` and `data_quality` answer "how many days above 35 °C?", "longest dry spell?", "was this July warmer than normal?" and "can I trust the history?" from the station's own data, with no extra CumulusMX endpoints.
 - **Historical rankings & Annual records** — competition rankings (1, 2, 2, 4) for extremes (heat, cold, rain, wind gusts) and yearly records summaries.
 - **MCP Resources** — declarative `weather://` resources for direct context retrieval in MCP clients.
 - **MCP Prompts** — ready-to-use guided prompts for daily analysis, extreme events, annual summaries, and period comparisons.
@@ -82,7 +83,7 @@ See [`.env.example`](.env.example) for all variables.
 | `LOG_LEVEL` | | `info` | Log verbosity: `info`, `debug`, `warning`, `error` |
 
 > **Security tip:** write tools are enabled by default. If you only need to query your station, set
-> `ENABLE_WRITE_TOOLS=false`. The 32 read-only tools keep working and the 15 write tools reply that writes are disabled.
+> `ENABLE_WRITE_TOOLS=false`. The 36 read-only tools keep working and the 15 write tools reply that writes are disabled.
 
 ---
 
@@ -91,7 +92,7 @@ See [`.env.example`](.env.example) for all variables.
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.1.0"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.2.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -151,6 +152,10 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 | `dayfile_range` | Daily history filtered by date range, with column alias support and `summary_only` mode |
 | `rankings` | Historical competition rankings (1, 2, 2, 4) of extremes (`temp_min`, `temp_max`, `lluvia_total`, `racha_max`, `temp_media`, `horas_sol`) |
 | `year_records` | Annual records and stats (extremes, rain, frost/warm days) for a given year |
+| `count_days` | Count days matching a condition (e.g. `temp_max >= 35`) with a per-year breakdown and optional date list |
+| `find_streaks` | Longest runs of consecutive days matching a condition (dry spells, heatwaves, frost runs) and any run in progress |
+| `anomaly` | Compare a period with the station's own climatology (same calendar window in other years): normal, difference, percentile, rank |
+| `data_quality` | Audit the daily history: missing days, days without temperature, incoherent values |
 | `logfile` | Interval log for a date range (standard or extra sensors) |
 | `records` | Records by scope (`alltime`, `thismonth`, `thisyear`, `month`) and variable |
 | `records_all` | All record categories in one single call |

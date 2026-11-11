@@ -1244,7 +1244,7 @@ class TestToolRegistration:
     async def test_tool_annotations_for_claude_permissions(self):
         """Verifica que todas las herramientas tienen anotaciones de solo lectura o destructivas."""
         tools = await server.mcp.list_tools()
-        assert len(tools) == 47
+        assert len(tools) == 51
         read_count = 0
         write_count = 0
         for t in tools:
@@ -1256,7 +1256,7 @@ class TestToolRegistration:
             else:
                 write_count += 1
                 assert t.annotations.destructive_hint is True
-        assert read_count == 32
+        assert read_count == 36
         assert write_count == 15
 
 

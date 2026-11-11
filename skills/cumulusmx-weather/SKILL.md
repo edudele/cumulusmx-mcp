@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   server: cumulusmx-mcp
 ---
 
@@ -26,6 +26,10 @@ Never invent weather values. Every number you report must come from a tool resul
 | A year's extremes, frost days, warm days | `year_records` |
 | Month-by-month overview of a year | `monthly_summary` |
 | Stats for any date range | `climate_summary` |
+| "How many days above/below X?" | `count_days` |
+| Longest dry spell, heatwave, frost run | `find_streaks` |
+| "Was this month warmer/wetter than normal?" | `anomaly` (compares with the station's own other years) |
+| Can I trust the history? Gaps, sensor faults | `data_quality` |
 | This period vs that period | `compare_periods` |
 | Raw daily rows or specific columns | `dayfile_range` (use `summary_only=true` first) |
 | All-time / this-month / this-year records | `records_all` (or `records` for one category) |

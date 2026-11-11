@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import math
+import operator
 import os
 import re
 import statistics
@@ -21,7 +22,7 @@ from starlette.responses import JSONResponse
 
 # Versión semántica del servidor. Debe coincidir con la cabecera de CHANGELOG.md
 # y con el tag de git (vX.Y.Z) que dispara la publicación de la imagen Docker.
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 logging.basicConfig(
@@ -784,13 +785,260 @@ async def year_records(year: int) -> str:
     return json.dumps(res, ensure_ascii=False)
 
 
+# ---------------------------------------------------------------- análisis sobre el histórico ----
+# Calculados sobre el dayfile cacheado: no requieren endpoints adicionales de CumulusMX.
+
+_OPS: dict[str, Any] = {">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le, "==": operator.eq}
+_NON_NUMERIC_COLS = {"fecha", "n", "dir_racha", "dir_viento_dominante"}
+MAX_LIST_ITEMS = 366
+
+
+def _numeric_var(variable: str) -> str:
+    """Resuelve alias y exige una columna numérica del dayfile."""
+    col = resolve_columns([variable])[-1]
+    if col in _NON_NUMERIC_COLS or col.startswith("hora_"):
+        raise ValueError(f"'{variable}' no es una columna numérica del dayfile")
+    return col
+
+
+def _select_rows(rows: list[dict], start: str = "", end: str = "") -> list[dict]:
+    """Filas del dayfile ordenadas por fecha dentro de [start, end] (ambos opcionales)."""
+    s = _check_date(start, "start") if start else None
+    e = _check_date(end, "end") if end else None
+    if s and e and e < s:
+        raise ValueError("end anterior a start")
+    sel = [r for r in rows if (s is None or r["_date"] >= s) and (e is None or r["_date"] <= e)]
+    return sorted(sel, key=lambda r: r["_date"])
+
+
+def count_matching(rows: list[dict], col: str, op: str, value: float) -> tuple[int, list[dict]]:
+    """(días evaluados con dato, filas que cumplen `col op value`)."""
+    fn = _OPS[op]
+    evaluated, hits = 0, []
+    for r in rows:
+        v = _num(r.get(col))
+        if v is None:
+            continue
+        evaluated += 1
+        if fn(v, value):
+            hits.append(r)
+    return evaluated, hits
+
+
+def compute_streaks(rows: list[dict], col: str, op: str, value: float, min_length: int = 2) -> list[dict]:
+    """Rachas de días CONSECUTIVOS que cumplen `col op value`. Un día sin dato o un hueco de fechas corta la racha."""
+    fn = _OPS[op]
+    runs: list[dict] = []
+    cur: list[datetime.date] = []
+
+    def close() -> None:
+        if len(cur) >= min_length:
+            runs.append({"dias": len(cur), "desde": str(cur[0]), "hasta": str(cur[-1])})
+
+    for r in sorted(rows, key=lambda x: x["_date"]):
+        d = r["_date"]
+        v = _num(r.get(col))
+        if v is not None and fn(v, value):
+            if cur and (d - cur[-1]).days == 1:
+                cur.append(d)
+            else:
+                close()
+                cur = [d]
+        else:
+            close()
+            cur = []
+    close()
+    return sorted(runs, key=lambda x: (-x["dias"], x["desde"]))
+
+
+def _shift_year(d: datetime.date, year: int) -> datetime.date:
+    try:
+        return d.replace(year=year)
+    except ValueError:  # 29 de febrero
+        return d.replace(year=year, day=28)
+
+
+def compute_anomaly(rows: list[dict], col: str, start: datetime.date, end: datetime.date,
+                    base_years: list[int], min_coverage: float = 0.8) -> dict:
+    """Compara el periodo [start, end] con la misma ventana calendario de `base_years`.
+    Columnas aditivas (lluvia, horas de sol...) se SUMAN; el resto se promedia."""
+    additive = col in ADDITIVE_COLUMNS
+    last = max((r["_date"] for r in rows), default=None)
+    if last is None or last < start:
+        raise ValueError("No hay datos en el dayfile para el periodo indicado")
+    eff_end = min(end, last)  # periodo en curso: se compara solo la parte transcurrida
+    span = (eff_end - start).days
+
+    def stat(s: datetime.date, e: datetime.date) -> tuple[float | None, int]:
+        vals = [v for r in rows if s <= r["_date"] <= e and (v := _num(r.get(col))) is not None]
+        needed = max(1, math.ceil(min_coverage * ((e - s).days + 1)))
+        if len(vals) < needed:
+            return None, len(vals)
+        return (round(sum(vals), 2) if additive else round(statistics.fmean(vals), 2)), len(vals)
+
+    value, n_days = stat(start, eff_end)
+    if value is None:
+        raise ValueError(f"Datos insuficientes de '{col}' en el periodo (cobertura mínima {int(min_coverage * 100)} %)")
+
+    by_year: dict[int, float] = {}
+    for y in base_years:
+        s_y = _shift_year(start, y)
+        v, _ = stat(s_y, s_y + datetime.timedelta(days=span))
+        if v is not None:
+            by_year[y] = v
+    if not by_year:
+        raise ValueError("No hay años de referencia con datos suficientes para comparar")
+
+    normal = round(statistics.fmean(by_year.values()), 2)
+    diff = round(value - normal, 2)
+    below = sum(1 for v in by_year.values() if v < value)
+    above = sum(1 for v in by_year.values() if v > value)
+    out: dict[str, Any] = {
+        "variable": col,
+        "unidad": UNITS.get(col, ""),
+        "metodo": "suma" if additive else "media",
+        "periodo": {"start": str(start), "end": str(eff_end), "dias_con_dato": n_days,
+                    "parcial": eff_end < end},
+        "valor": value,
+        "normal": normal,
+        "diferencia": diff,
+        "diferencia_pct": round(100 * diff / normal, 1) if additive and normal else None,
+        "percentil": round(100 * below / len(by_year)),
+        "posicion_entre_anios": 1 + above,
+        "anios_comparados": len(by_year) + 1,
+        "por_anio": {str(y): v for y, v in sorted(by_year.items())},
+    }
+    if len(by_year) < 3:
+        out["advertencia"] = "Pocos años de referencia (<3): la 'normal' es poco representativa."
+    return out
+
+
+def check_quality(rows: list[dict], max_items: int = 100) -> dict:
+    """Huecos de fechas y valores incoherentes del dayfile (independiente de las unidades)."""
+    rows = sorted(rows, key=lambda r: r["_date"])
+    if not rows:
+        return {"n_dias": 0}
+    present = {r["_date"] for r in rows}
+    first, last = rows[0]["_date"], rows[-1]["_date"]
+    missing = [str(first + datetime.timedelta(days=i)) for i in range((last - first).days + 1)
+               if first + datetime.timedelta(days=i) not in present]
+    issues: list[dict] = []
+    no_temp: list[str] = []
+
+    def flag(r: dict, problem: str) -> None:
+        issues.append({"fecha": str(r["_date"]), "problema": problem})
+
+    for r in rows:
+        tmin, tmax = _num(r.get("temp_min")), _num(r.get("temp_max"))
+        if tmin is None and tmax is None:
+            no_temp.append(str(r["_date"]))
+        elif tmin is not None and tmax is not None and tmin > tmax:
+            flag(r, f"temp_min ({tmin}) > temp_max ({tmax})")
+        hmin, hmax = _num(r.get("hum_min")), _num(r.get("hum_max"))
+        for name, h in (("hum_min", hmin), ("hum_max", hmax)):
+            if h is not None and not 0 <= h <= 100:
+                flag(r, f"{name} fuera de 0-100 ({h})")
+        if hmin is not None and hmax is not None and hmin > hmax:
+            flag(r, f"hum_min ({hmin}) > hum_max ({hmax})")
+        pmin, pmax = _num(r.get("pres_min")), _num(r.get("pres_max"))
+        if pmin is not None and pmax is not None and pmin > pmax:
+            flag(r, f"pres_min ({pmin}) > pres_max ({pmax})")
+        for name in ("lluvia_total", "horas_sol"):
+            v = _num(r.get(name))
+            if v is not None and v < 0:
+                flag(r, f"{name} negativo ({v})")
+
+    return {
+        "n_dias": len(rows), "desde": str(first), "hasta": str(last),
+        "dias_esperados": (last - first).days + 1,
+        "dias_faltantes": {"total": len(missing), "fechas": missing[:max_items]},
+        "dias_sin_temperatura": {"total": len(no_temp), "fechas": no_temp[:max_items]},
+        "valores_incoherentes": {"total": len(issues), "detalle": issues[:max_items]},
+        "ok": not missing and not issues and not no_temp,
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def count_days(variable: str, op: Literal[">", ">=", "<", "<=", "=="], value: float,
+                     start: str = "", end: str = "", list_days: bool = False) -> str:
+    """Cuenta los días del histórico que cumplen una condición sobre una columna del dayfile, con desglose por año.
+    Ej.: variable='temp_max', op='>=', value=35 -> días de calor extremo; 'rain' '>=' 0.2 -> días de lluvia;
+    'temp_min' '<=' 0 -> días de helada. variable acepta nombres o alias (ver dayfile_range).
+    start/end opcionales (yyyy-mm-dd; por defecto todo el histórico). list_days=True lista las fechas (máx 366).
+    Compara en las unidades de la estación."""
+    col = _numeric_var(variable)
+    rows = _select_rows(await _all_dayfile(), start, end)
+    evaluated, hits = count_matching(rows, col, op, value)
+    by_year: dict[str, int] = {}
+    for r in hits:
+        by_year[str(r["_date"].year)] = by_year.get(str(r["_date"].year), 0) + 1
+    out: dict[str, Any] = {
+        "condicion": f"{col} {op} {value:g}", "unidad": UNITS.get(col, ""),
+        "periodo": {"desde": str(rows[0]["_date"]) if rows else None, "hasta": str(rows[-1]["_date"]) if rows else None},
+        "dias_evaluados": evaluated, "dias_que_cumplen": len(hits),
+        "por_anio": dict(sorted(by_year.items())),
+    }
+    if list_days:
+        out["fechas"] = [str(r["_date"]) for r in hits[:MAX_LIST_ITEMS]]
+        out["lista_truncada"] = len(hits) > MAX_LIST_ITEMS
+    return json.dumps(out, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def find_streaks(variable: str, op: Literal[">", ">=", "<", "<=", "=="], value: float,
+                       start: str = "", end: str = "", min_length: int = 2, top: int = 5) -> str:
+    """Rachas más largas de días CONSECUTIVOS que cumplen una condición (un día sin dato corta la racha).
+    Ej.: sequía = variable='rain', op='<', value=0.2; ola de calor = 'temp_max' '>=' 35; helada = 'temp_min' '<=' 0.
+    top: nº de rachas a devolver (1-50). min_length: longitud mínima en días.
+    Indica también si hay una racha en curso (termina en el último día con datos)."""
+    col = _numeric_var(variable)
+    rows = _select_rows(await _all_dayfile(), start, end)
+    runs = compute_streaks(rows, col, op, value, max(1, min_length))
+    last_day = str(rows[-1]["_date"]) if rows else None
+    out = {
+        "condicion": f"{col} {op} {value:g}", "unidad": UNITS.get(col, ""),
+        "periodo": {"desde": str(rows[0]["_date"]) if rows else None, "hasta": last_day},
+        "n_rachas": len(runs),
+        "rachas": runs[:max(1, min(top, 50))],
+        "racha_en_curso": next((r for r in runs if r["hasta"] == last_day), None),
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def anomaly(start: str, end: str, variable: str = "temp_media",
+                  baseline_start_year: int | None = None, baseline_end_year: int | None = None) -> str:
+    """Compara un periodo con la climatología propia de la estación: el mismo tramo del calendario en los demás años.
+    Responde a '¿este mes fue más cálido/seco de lo normal?'. variable: nombre o alias (por defecto temp_media);
+    lluvia y horas de sol se SUMAN, el resto se promedia. Devuelve valor, normal, diferencia (y % en acumulados),
+    percentil, posición entre años y valores por año. Si el periodo está en curso compara solo la parte transcurrida.
+    baseline_start_year por defecto = CUMULUS_DATA_START_YEAR. Años con <80 % de datos en la ventana se descartan."""
+    s, e = _check_date(start, "start"), _check_date(end, "end")
+    if e < s:
+        raise ValueError("end anterior a start")
+    col = _numeric_var(variable)
+    rows = await _all_dayfile()
+    lo = baseline_start_year if baseline_start_year is not None else DATA_START_YEAR
+    hi = baseline_end_year if baseline_end_year is not None else 2050
+    years = sorted({r["_date"].year for r in rows if lo <= r["_date"].year <= hi and r["_date"].year != s.year})
+    return json.dumps(compute_anomaly(rows, col, s, e, years), ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def data_quality(start: str = "", end: str = "", max_items: int = 100) -> str:
+    """Revisa la calidad del histórico diario: días sin registro, días sin temperatura y valores incoherentes
+    (mín > máx, humedad fuera de 0-100, lluvia o sol negativos). Útil para detectar caídas de la estación o
+    sensores averiados antes de fiarse de los récords. max_items limita las listas (1-366)."""
+    rows = _select_rows(await _all_dayfile(), start, end)
+    return json.dumps(check_quality(rows, max(1, min(max_items, MAX_LIST_ITEMS))), ensure_ascii=False)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def today_all(strip_html: bool = True) -> str:
     """Hoy vs ayer de TODAS las magnitudes (temp, hum, rain, wind, pressure, solar) en una sola llamada."""
-    res = {}
-    for k in ("temp", "hum", "rain", "wind", "pressure", "solar"):
-        t = await _get(f"/api/todayyest/{k}.json")
-        res[k] = json.loads(t) if t.startswith("{") else t
+    keys = ("temp", "hum", "rain", "wind", "pressure", "solar")
+    texts = await asyncio.gather(*(_get(f"/api/todayyest/{k}.json") for k in keys))
+    res = {k: (json.loads(t) if t.startswith("{") else t) for k, t in zip(keys, texts)}
     s = json.dumps(res, ensure_ascii=False)
     return _clean(s) if strip_html else s
 
@@ -801,14 +1049,14 @@ async def records_all(scope: Literal["alltime", "thismonth", "thisyear", "month"
                       strip_html: bool = True) -> str:
     """Todos los récords (temperatura, humedad, presión, viento, lluvia) del ámbito elegido en una llamada.
     Si scope='month', indicar month (1-12)."""
+    keys = ("temperature", "humidity", "pressure", "wind", "rain")
+    if scope == "month" and not 1 <= month <= 12:
+        raise ValueError("month debe estar entre 1 y 12")
+    paths = [f"/api/records/month/{month}/{k}.json" if scope == "month" else f"/api/records/{scope}/{k}.json"
+             for k in keys]
+    texts = await asyncio.gather(*(_get(p) for p in paths))
     res = {}
-    for k in ("temperature", "humidity", "pressure", "wind", "rain"):
-        if scope == "month":
-            if not 1 <= month <= 12:
-                raise ValueError("month debe estar entre 1 y 12")
-            t = await _get(f"/api/records/month/{month}/{k}.json")
-        else:
-            t = await _get(f"/api/records/{scope}/{k}.json")
+    for k, t in zip(keys, texts):
         try:
             res[k] = json.loads(t)
         except ValueError:

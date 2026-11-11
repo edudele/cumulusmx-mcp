@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.2.0]
+
+### Added
+- `count_days`: days matching a condition on any numeric day-file column (alias-aware), with per-year breakdown.
+- `find_streaks`: longest runs of consecutive days matching a condition, plus the run in progress if any.
+- `anomaly`: compares a period with the station's own climatology (same calendar window in the other years):
+  normal, difference (and % for accumulated variables), percentile and rank. In-progress periods are compared on the
+  elapsed part only; years with under 80 % coverage are skipped; 29 February is handled.
+- `data_quality`: missing days, days without temperature and incoherent values in the daily history.
+- These four are computed from the cached day file, so they need no additional CumulusMX endpoints.
+- Tests that call the new tools through a real in-memory MCP client (schema validation and serialization included).
+
+### Changed
+- `today_all` and `records_all` now issue their 6 / 5 CumulusMX requests concurrently instead of one by one.
+- The skill (`SKILL.md`, `reference.md`) documents the new tools; the tool count is now 51 (36 read-only, 15 write).
+
 ## [1.1.0]
 
 ### Added

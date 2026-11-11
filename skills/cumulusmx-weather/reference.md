@@ -1,6 +1,6 @@
 # cumulusmx-mcp reference
 
-Parameter notes for the 47 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
+Parameter notes for the 51 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
 
 ## Read-only tools
 
@@ -18,6 +18,10 @@ Parameter notes for the 47 tools of cumulusmx-mcp. Tool names are in backticks i
 | `dayfile` | Paginated raw daily history. `start`, `length` (max 500), `search`. Prefer `dayfile_range`. |
 | `dayfile_range` | `start`, `end`, optional `columns` (names or English aliases), `max_rows` (max 400), `summary_only`. |
 | `climate_summary` | `start`, `end`. Absolute max/min temperature with dates, mean, total rain, rain days, wettest day, peak gust, pressure extremes, sun hours, UV and radiation peaks. |
+| `count_days` | `variable` (name or alias), `op` (`>`, `>=`, `<`, `<=`, `==`), `value`, optional `start`/`end`, `list_days` (max 366 dates). Counts matching days with a per-year breakdown, for example `temp_max >= 35` or `rain >= 0.2`. Compares in station units. |
+| `find_streaks` | Same condition as `count_days` plus `min_length` (default 2) and `top` (1-50). Longest runs of consecutive days, and `racha_en_curso` if a run ends on the last day with data. Dry spell: `rain < 0.2`; heatwave: `temp_max >= 35`; frost: `temp_min <= 0`. A day without data breaks a run. |
+| `anomaly` | `start`, `end`, `variable` (default `temp_media`), optional `baseline_start_year` / `baseline_end_year`. Compares the period with the same calendar window in the other years: `valor`, `normal`, `diferencia`, `diferencia_pct` (accumulated variables only), `percentil`, `posicion_entre_anios`, `por_anio`. Rain and sun hours are summed, others averaged. In-progress periods are compared on the elapsed part only. Years with under 80 % coverage are skipped; with fewer than 3 reference years a warning is returned. |
+| `data_quality` | Optional `start`/`end`, `max_items`. Missing days, days without temperature and incoherent values (min > max, humidity outside 0-100, negative rain or sun). Run it before trusting records or long-term comparisons. |
 | `monthly_summary` | `year` (2000-2050). One aggregate per month that has data. |
 | `compare_periods` | `start_a`, `end_a`, `start_b`, `end_b`. Returns `{"A": ..., "B": ...}` with the `climate_summary` statistics. |
 | `year_records` | `year`. Extremes, rain totals, wettest day, frost days, warm days (>=25 and >=30 C). Errors if the year has no data. |
