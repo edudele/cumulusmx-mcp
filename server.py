@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse
 
 # Versión semántica del servidor. Debe coincidir con la cabecera de CHANGELOG.md
 # y con el tag de git (vX.Y.Z) que dispara la publicación de la imagen Docker.
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 logging.basicConfig(
@@ -254,7 +254,9 @@ def _num(x: Any) -> float | None:
         f = float(x)
     except (TypeError, ValueError):
         return None
-    if math.isnan(f) or f <= -9999:
+    # CumulusMX usa -9999 / 9999 (DefaultHiVal / DefaultLoVal) como "sin dato"; ninguna columna del dayfile
+    # puede valer legítimamente <= -999.
+    if math.isnan(f) or f <= -999 or f >= 9999:
         return None
     return f
 
@@ -277,12 +279,21 @@ async def current_data() -> str:
     return await _get("/api/data/currentdata")
 
 
+def _tags_path(tags: list[str], plain_numbers: bool = True) -> str:
+    """Ruta de /api/tags/process.json. CumulusMX acepta el parámetro especial `rc` (debe ir el primero) que aplica el
+    formato 'remove commas' a todos los tags: sin él, una estación con configuración regional española devuelve
+    '10,0' (coma decimal), ambiguo y no convertible a número."""
+    return "/api/tags/process.json?" + ("rc&" if plain_numbers else "") + "&".join(tags)
+
+
 @mcp.tool(annotations=READ_ONLY)
-async def get_tags(tags: list[str]) -> str:
-    """Valores de webtags de CumulusMX (p.ej. ['temp','hum','press','wlatest']). Devuelve JSON {tag: valor}."""
+async def get_tags(tags: list[str], plain_numbers: bool = True) -> str:
+    """Valores de webtags de CumulusMX (p.ej. ['temp','hum','press','wlatest']). Devuelve JSON {tag: valor}.
+    Todos los valores llegan como texto. plain_numbers=True (por defecto) aplica el formato 'rc' de CumulusMX:
+    decimales con punto ('10.0' en vez de '10,0'). Con False se respeta el formato regional de la estación."""
     if not tags or len(tags) > 50 or not all(TAG_RE.match(t) for t in tags):
         raise ValueError("tags inválidos (solo letras, números y _; máximo 50)")
-    return await _get("/api/tags/process.json?" + "&".join(tags))
+    return await _get(_tags_path(tags, plain_numbers))
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -380,7 +391,9 @@ DAYFILE_COLS = [
     "sensacion_viento_min", "hora_sv_min", "rocio_max", "hora_rocio_max", "rocio_min", "hora_rocio_min",
     "dir_viento_dominante", "grados_dia_calef", "grados_dia_refr", "solar_max", "hora_solar_max",
     "uv_max", "hora_uv_max", "feels_max", "hora_feels_max", "feels_min", "hora_feels_min",
-    "humidex_max", "hora_humidex_max", "horas_frio"
+    "humidex_max", "hora_humidex_max", "horas_frio",
+    # Añadidas en versiones recientes de CumulusMX (orden oficial: High24hRain, HighBgt, HighWbgt)
+    "lluvia_24h_max", "hora_lluvia_24h", "bgt_max", "hora_bgt_max", "wbgt_max", "hora_wbgt_max",
 ]
 
 CANONICAL_COLUMNS = (
@@ -415,6 +428,9 @@ COLUMN_ALIASES: dict[str, str] = {
     "solar": "solar_max",
     "uv": "uv_max",
     "et": "ET",
+    "rain24h": "lluvia_24h_max",
+    "bgt": "bgt_max",
+    "wbgt": "wbgt_max",
 }
 
 _DAYFILE_LOWER_MAP = {c.lower(): c for c in DAYFILE_COLS}
@@ -426,6 +442,7 @@ UNITS: dict[str, str] = {
     "hum_min": "%", "hum_max": "%", "horas_sol": "h",
     "ET": "mm", "recorrido_viento": "km", "solar_max": "W/m²",
     "uv_max": "UV",
+    "lluvia_24h_max": "mm", "bgt_max": "°C", "wbgt_max": "°C",
 }
 
 ADDITIVE_COLUMNS: frozenset[str] = frozenset({"lluvia_total", "horas_sol", "ET", "recorrido_viento"})
@@ -566,14 +583,21 @@ def _valid(rows: Iterable[dict], var: str) -> list[tuple[str, float]]:
     return out
 
 
+MAX_TIE_DATES = 10
+
+
 def extreme(rows: Iterable[dict], var: str, mode: Literal["min", "max"]) -> dict | None:
-    """Devuelve {'valor', 'fecha' (la más antigua), 'fechas' (todas las empatadas)}."""
+    """Devuelve {'valor', 'fecha' (la más antigua), 'fechas' (las empatadas más antiguas, máx. MAX_TIE_DATES)
+    y 'n_fechas' (total de empates) cuando hay más de MAX_TIE_DATES}."""
     pairs = _valid(rows, var)
     if not pairs:
         return None
     target = min(v for _, v in pairs) if mode == "min" else max(v for _, v in pairs)
     fechas = sorted(f for f, v in pairs if v == target)
-    return {"valor": round(target, 2), "fecha": fechas[0], "fechas": fechas}
+    out = {"valor": round(target, 2), "fecha": fechas[0], "fechas": fechas[:MAX_TIE_DATES]}
+    if len(fechas) > MAX_TIE_DATES:  # p. ej. lluvia mínima 0,0 repetida en cientos de días
+        out["n_fechas"] = len(fechas)
+    return out
 
 
 def rank(rows: Iterable[dict], var: str, top: int = 10, order: Literal["asc", "desc"] = "desc") -> list[dict]:
@@ -707,6 +731,51 @@ async def compare_periods(start_a: str, end_a: str, start_b: str, end_b: str) ->
     return json.dumps(res, ensure_ascii=False)
 
 
+# Series de /api/graphdata (nombres según la documentación de CumulusMX) -> grupo de unidades de units.json
+_SERIES_UNIT_GROUP = {
+    "intemp": "temp", "dew": "temp", "apptemp": "temp", "feelslike": "temp", "wchill": "temp",
+    "heatindex": "temp", "temp": "temp", "mintemp": "temp", "maxtemp": "temp", "avgtemp": "temp",
+    "wgust": "wind", "wspeed": "wind", "rfall": "rain", "dailyrain": "rain", "rrate": "rain/h", "press": "press",
+}
+_SERIES_FIXED_UNIT = {
+    "hum": "%", "inhum": "%", "SolarRad": "W/m²", "CurrentSolarMax": "W/m²",
+    "bearing": "°", "avgbearing": "°", "sunshours": "h",
+}
+
+
+async def _graph_units() -> dict[str, str]:
+    """Unidades configuradas en la estación (/api/graphdata/units.json). Si falla o el formato no es el esperado,
+    devuelve {} para que graph_summary siga funcionando sin unidades."""
+    try:
+        raw = await _json("/api/graphdata/units.json")
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if isinstance(v, dict):  # formato antiguo de la wiki: {"temp": {"units": "C", "decimals": 1}}
+            v = v.get("units")
+        if isinstance(v, str) and v:
+            out[k] = html.unescape(v)
+    return out
+
+
+def _series_unit(series: str, units: dict[str, str]) -> str | None:
+    if series in _SERIES_FIXED_UNIT:
+        return _SERIES_FIXED_UNIT[series]
+    group = _SERIES_UNIT_GROUP.get(series)
+    if group is None:
+        return None
+    suffix = "/h" if group.endswith("/h") else ""
+    base = units.get(group.removesuffix("/h"))
+    if not base:
+        return None
+    if base in ("C", "F"):
+        base = "°" + base
+    return base + suffix
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def graph_summary(name: str, start: str = "", end: str = "", points: int = 0) -> str:
     """Resumen estadístico de una serie de gráfica (mín, máx, media, último valor, con hora ISO) en vez de miles de puntos.
@@ -722,6 +791,7 @@ async def graph_summary(name: str, start: str = "", end: str = "", points: int =
                 raise ValueError(f"{k} con formato inválido")
             params[k] = v
     j = await _json(f"/api/graphdata/{name}.json", params)
+    units = await _graph_units()
     out = {}
     for serie, pts in (j.items() if isinstance(j, dict) else []):
         vals = [(p[0], _num(p[1])) for p in pts if isinstance(p, list) and len(p) >= 2 and _num(p[1]) is not None]
@@ -732,6 +802,8 @@ async def graph_summary(name: str, start: str = "", end: str = "", points: int =
         d = {"n": len(vals), "min": mn[1], "min_en": iso(mn[0]), "max": mx[1], "max_en": iso(mx[0]),
              "media": round(sum(v for _, v in vals) / len(vals), 2), "ultimo": vals[-1][1],
              "ultimo_en": iso(vals[-1][0]), "primero_en": iso(vals[0][0]), "nota_hora": "ISO en UTC"}
+        if (unidad := _series_unit(serie, units)):
+            d["unidad"] = unidad
         if points > 0:
             step = max(1, len(vals) // min(points, 300))
             d["serie"] = [[iso(t), v] for t, v in vals[::step]]
@@ -946,6 +1018,9 @@ def check_quality(rows: list[dict], max_items: int = 100) -> dict:
                 flag(r, f"{name} fuera de 0-100 ({h})")
         if hmin is not None and hmax is not None and hmin > hmax:
             flag(r, f"hum_min ({hmin}) > hum_max ({hmax})")
+        for name, h in (("hum_min", hmin), ("hum_max", hmax)):
+            if h is not None and h == 0:
+                flag(r, f"{name} = 0 % (posible fallo del sensor)")
         pmin, pmax = _num(r.get("pres_min")), _num(r.get("pres_max"))
         if pmin is not None and pmax is not None and pmin > pmax:
             flag(r, f"pres_min ({pmin}) > pres_max ({pmax})")
@@ -1074,12 +1149,13 @@ async def records_all(scope: Literal["alltime", "thismonth", "thisyear", "month"
 @mcp.tool(annotations=READ_ONLY)
 async def snapshot() -> str:
     """Foto rápida de la estación: temperatura, sensación, humedad, rocío, presión y tendencia, viento/racha/dirección,
-    lluvia (hoy/mes/año/tasa), sol/UV, extremos de hoy, amanecer/atardecer, luna y estado de la estación."""
+    lluvia (hoy/mes/año/tasa), sol/UV, extremos de hoy, amanecer/atardecer, luna y estado de la estación.
+    Los números llegan con punto decimal (formato 'rc' de CumulusMX); las unidades van en los tags *unit."""
     tags = ["temp", "tempunit", "feelslike", "dew", "hum", "press", "presstrend", "pressunit", "wlatest", "wgust",
             "bearing", "currentwdir", "windunit", "rrate", "rfall", "rmonth", "ryear", "rainunit", "SolarRad", "UV",
             "tempTH", "TtempTH", "tempTL", "TtempTL", "wspeedTH", "pressTH", "pressTL", "humTH", "humTL",
             "sunrise", "sunset", "daylength", "moonphase", "DataStopped", "version", "build", "stationtype", "time", "date"]
-    return await _get("/api/tags/process.json?" + "&".join(tags))
+    return await _get(_tags_path(tags))
 
 
 @mcp.tool(annotations=READ_ONLY)

@@ -165,7 +165,7 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 | `climate_summary` | Multi-day or multi-year aggregate climate summary |
 | `compare_periods` | Side-by-side comparison of two date ranges |
 | `snapshot` | Quick station snapshot (temperatures, extremes, wind, rain, sun/moon, status) |
-| `get_tags` | Query CumulusMX webtags by name |
+| `get_tags` | Query CumulusMX webtags by name; numbers use a decimal point (`rc` format, optional) |
 | `render_template` | Evaluate custom webtag templates with formatting modifiers |
 | `diary` | Weather diary entries or summary |
 | `simple_report` | CumulusMX summary reports over the whole history: temperature, rainfall, wind run, sunshine, ET, dry/wet days |

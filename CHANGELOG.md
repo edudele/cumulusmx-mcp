@@ -5,6 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.4.0]
+
+Verified against the official Cumulus MX Local API wiki, the CumulusMX 5.2.0 source and a live 5.2.0 station.
+
+### Added
+- `graph_summary` reports the unit of each series (`unidad`) using the station's `units.json`
+  (flat format of 5.2.0 and the older nested format); it degrades gracefully if units cannot be read.
+- Day-file columns `lluvia_24h_max`, `bgt_max`, `wbgt_max` (+ `hora_*`), aliases `rain24h`, `bgt`, `wbgt`.
+  The 53 existing columns were checked against CumulusMX's `DayfileFieldNames`: order is identical.
+- `data_quality` flags days with 0 % humidity as a probable sensor fault.
+
+### Changed
+- `get_tags` and `snapshot` now request tags with CumulusMX's `rc` parameter, so numbers arrive as `10.0`
+  instead of the regional `"10,0"`. `get_tags(plain_numbers=false)` restores the previous behaviour.
+
+### Fixed
+- Extreme values no longer list every tied date: at most 10 are returned plus `n_fechas` with the total.
+  A `summary_only` request on a column with hundreds of ties used to return several kilobytes of dates.
+- "No data" sentinels of CumulusMX (`-9999` and `9999`, also `<= -999`) are now ignored; only `-9999` was before,
+  so a low default of `9999` could pollute rankings and averages.
+
 ## [1.3.0]
 
 Endpoints and names below were verified against the CumulusMX source (`Api.cs`) rather than assumed.

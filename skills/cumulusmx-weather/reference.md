@@ -36,7 +36,7 @@ Parameter notes for the 53 tools of cumulusmx-mcp. Tool names are in backticks i
 | `simple_report` | `report`: `temperature`, `rainfall`, `windrun`, `sunshine`, `et`, `drydays`, `wetdays`; `text` (default true; false returns HTML). CumulusMX summary tables built from the whole day file, in the station's units. Large output: summarize it. |
 | `extra_sensors` | `sensor`: `temp`, `hum`, `dew`, `soiltemp`, `soilmoisture`, `soilec`, `leaf8`, `airqual`, `lightning`, `usertemp`, `laserdepth`, `laserdistance`, `snow24h`, `snowseason`, `airLinkCountsOut`, `airLinkAqiOut`, `airLinkPctOut`, `airLinkCountsIn`, `airLinkAqiIn`, `airLinkPctIn`, `co2sensor`, `bgt`. Current values; only sensors configured on the station return data. |
 | `diary` | Without `date`: summary of days with notes. With `date`: that entry. |
-| `get_tags` | `tags`: up to 50 webtag names (letters, digits, underscore), for example `["temp", "hum", "press"]`. |
+| `get_tags` | `tags`: up to 50 webtag names (letters, digits, underscore, case sensitive), for example `["temp", "hum", "press"]`. `plain_numbers` (default true) applies CumulusMX's `rc` format: `10.0` instead of `10,0`. All values are returned as strings. |
 | `render_template` | A webtag template up to 1000 characters that contains `<#tag ...>` markers, for example `<#temp dp=2> <#time format="HH:mm">`. |
 | `api_get` | Whitelisted read-only GET on CumulusMX endpoints. Use only when no dedicated tool exists. Settings, utils and reports-generation paths are blocked. |
 | `get_error_log` | CumulusMX warnings and errors. |
@@ -52,13 +52,13 @@ Use `order="asc"` for coldest minimum or driest, `desc` for the highest values.
 
 Common columns for `dayfile_range`: `fecha`, `temp_min`, `temp_max`, `temp_media`, `lluvia_total`,
 `racha_max`, `pres_min`, `pres_max`, `hum_min`, `hum_max`, `horas_sol`.
-Also available: `lluvia_rate_max`, `viento_medio_max`, `dir_viento_dominante`, `solar_max`, `uv_max`, `ET`,
+Also available: `lluvia_24h_max` (max rain in 24 h), `bgt_max`, `wbgt_max` (black-globe / wet-bulb globe temperature; blank on stations without the sensor or on older day files), `lluvia_rate_max`, `viento_medio_max`, `dir_viento_dominante`, `solar_max`, `uv_max`, `ET`,
 `recorrido_viento`, `indice_calor_max`, `temp_aparente_min/max`, `sensacion_viento_min`, `rocio_min/max`,
 `humidex_max`, `grados_dia_calef`, `grados_dia_refr`, `horas_frio` and their `hora_*` time-of-extreme companions.
 
 English aliases: `date`, `mintemp`, `maxtemp`, `avgtemp`/`temp`, `rain`/`precip`/`precipitation`,
 `wind`/`gust`/`windgust`, `press`/`minpress`, `maxpress`, `hum`/`minhum`, `maxhum`,
-`sun`/`sunhours`, `solar`, `uv`, `et`. Unknown columns raise an error that lists the valid ones.
+`sun`/`sunhours`, `solar`, `uv`, `et`, `rain24h`, `bgt`, `wbgt`. Unknown columns raise an error that lists the valid ones.
 
 Units (default configuration): temperature C, rain mm, gust km/h, pressure hPa, humidity %, sun hours h,
 solar W/m2.

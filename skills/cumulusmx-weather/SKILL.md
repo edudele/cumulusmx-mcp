@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.3.0"
+  version: "1.4.0"
   server: cumulusmx-mcp
 ---
 
@@ -52,13 +52,22 @@ Read it before calling `dayfile_range`, `rankings`, `graph_summary` or any write
    `graph_summary` returns timestamps in **UTC** (ISO), so convert before quoting local times.
 3. **Units come from the station.** Defaults in the history tools are °C, mm, km/h, hPa.
    Check `station_info` with `kind="units"` if the user's station may be configured differently.
+   `graph_summary` adds a `unidad` field per series when it can.
+   **Decimal separators:** `get_tags` and `snapshot` return plain numbers with a decimal point.
+   Text that CumulusMX formats itself (`records*`, `today_*`, `noaa_report`, `simple_report`, `diary`,
+   `extra_sensors`, `logfile`) follows the station's regional settings and may use decimal commas
+   (`"10,0"` means 10.0). Read them as decimals, never as thousands.
 4. **Field and column names are in Spanish** (`temp_max`, `lluvia_total`, `racha_max`, `horas_sol`).
    English aliases such as `maxtemp`, `rain`, `gust` are accepted by `dayfile_range`.
    Translate to the user's language when reporting.
 5. **Rankings use competition ranking** (1, 2, 2, 4): ties share a position.
 6. **History starts at `CUMULUS_DATA_START_YEAR`** (default 2023). If a ranking looks too short,
    pass `start_year` explicitly, and say which years the answer covers.
-7. **Say what you could not find.** If a tool errors or returns empty data (station offline,
+7. **Distrust impossible values.** CumulusMX uses -9999 / 9999 for "no data" (the server already
+   drops them) and a day with 0 % humidity is almost always a sensor fault. Run `data_quality` before
+   quoting records or extremes, and mention suspicious days instead of presenting them as weather.
+8. **Ties:** extreme values report up to 10 tied dates plus `n_fechas` (the total count) when there are more.
+9. **Say what you could not find.** If a tool errors or returns empty data (station offline,
    year without data), report that instead of estimating.
 
 ## Write tools: ask first
