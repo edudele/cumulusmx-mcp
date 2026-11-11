@@ -71,7 +71,7 @@ jobs:
   github-release:
     # Crea la GitHub Release al empujar un tag vX.Y.Z, con las notas de esa versión en CHANGELOG.md
     # más la lista automática de cambios desde el tag anterior.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

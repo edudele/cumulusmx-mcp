@@ -1,0 +1,75 @@
+name: Release
+
+# Publicación manual de una versión: crea el tag vX.Y.Z y la GitHub Release (con las notas del CHANGELOG)
+# y lanza la construcción de las imágenes Docker de ese tag.
+# Uso: Actions -> Release -> Run workflow -> version = 1.5.0 (sin "v").
+# Alternativa equivalente: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z` (lo gestiona docker-publish.yml).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión a publicar, sin 'v' (ej. 1.5.0). Debe coincidir con __version__ en server.py y tener sección en CHANGELOG.md"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Versión inválida: '$VERSION' (usa X.Y.Z, sin 'v')" >&2
+            exit 1
+          fi
+          code_version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' server.py)
+          if [ "$code_version" != "$VERSION" ]; then
+            echo "La versión pedida ($VERSION) no coincide con __version__ en server.py ($code_version)" >&2
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "El tag v$VERSION ya existe" >&2
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            /^## \[/ { found = 0 }
+            found
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No hay sección '## [$VERSION]' en CHANGELOG.md" >&2
+            exit 1
+          fi
+
+      - name: Create tag and GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ inputs.version }}
+          body_path: release-notes.md
+          generate_release_notes: true
+
+      - name: Build and push Docker images for the new tag
+        # Los tags creados con GITHUB_TOKEN no disparan otros workflows: se lanza explícitamente (workflow_dispatch sí está permitido).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh workflow run docker-publish.yml --ref "v$VERSION"
