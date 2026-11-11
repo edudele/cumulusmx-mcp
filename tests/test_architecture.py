@@ -15,7 +15,7 @@ PKG = ROOT / "cumulusmx_mcp"
 sys.path.insert(0, str(ROOT))
 
 # Cada módulo solo puede importar módulos de capas anteriores (índice menor) o de su misma capa dentro de tools/.
-LAYERS = ["config", "utils", "safety", "backups", "client", "capture", "app", "dayrows", "analysis", "settings_engine", "alerts",
+LAYERS = ["config", "utils", "metrics", "safety", "backups", "client", "capture", "app", "dayrows", "analysis", "settings_engine", "alerts",
           "reporting"]
 TOOLS = ["tools"]          # tools/* (cualquier orden entre ellas, salvo dependencias explícitas)
 TOP = ["resources", "prompts", "cli", "_facade"]

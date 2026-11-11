@@ -115,3 +115,57 @@ def test_startup_does_not_check_pypi_for_updates():
     env = {k: v for k, v in ENV.items() if k != "FASTMCP_CHECK_FOR_UPDATES"}
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, cwd=ROOT, timeout=60)
     assert out.stdout.split() == ["off", "off"], out.stderr
+
+
+def _get(base, path, token=None):
+    req = urllib.request.Request(f"{base}{path}", headers={"Authorization": f"Bearer {token}"} if token else {})
+    return urllib.request.urlopen(req, timeout=5)
+
+
+def _series(body, line_start):
+    """Valor de la serie cuyo texto empieza por `line_start` (0 si todavía no existe)."""
+    for line in body.splitlines():
+        if line.startswith(line_start + " "):
+            return float(line.rsplit(" ", 1)[1])
+    return 0.0
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_needs_a_token_and_counts_real_tool_calls(server_url):
+    base, _ = server_url
+    with pytest.raises(urllib.error.HTTPError) as exc:                  # a diferencia de /health, /metrics exige token
+        _get(base, "/metrics")
+    assert exc.value.code == 401
+    ping = 'cumulusmx_mcp_tool_calls_total{resultado="ok",tool="ping"}'
+    fail = 'cumulusmx_mcp_writes_total{resultado="fallo",tool="mysql_table"}'
+    before = _get(base, "/metrics", "full-tok").read().decode()         # el servidor se comparte con otros tests
+    async with Client(transport(base, "full-tok")) as c:
+        await c.call_tool("ping", {})
+        await c.call_tool("ping", {})
+        await c.call_tool("mysql_table", {"action": "create", "table": "monthly"}, raise_on_error=False)
+    for token in ("full-tok", "ro-tok"):                                # el token de solo lectura también puede leerlas
+        resp = _get(base, "/metrics", token)
+        body = resp.read().decode()
+        assert resp.headers["Content-Type"].startswith("text/plain; version=0.0.4")
+        assert _series(body, ping) - _series(before, ping) == 2
+        assert _series(body, fail) - _series(before, fail) == 1
+        assert "cumulusmx_mcp_cumulus_up 0" in body and "cumulusmx_mcp_write_tools_enabled 1" in body
+
+
+def test_metrics_endpoint_can_be_disabled():
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "cumulusmx_mcp", "--host", "127.0.0.1", "--port", str(port)],
+                            env={**ENV, "MCP_METRICS": "false"}, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.2)
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _get(f"http://127.0.0.1:{port}", "/metrics", "full-tok")
+        assert exc.value.code == 404
+    finally:
+        proc.terminate()
+        proc.wait(timeout=15)

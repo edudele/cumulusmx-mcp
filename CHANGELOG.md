@@ -15,6 +15,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   delete backup is kept for reference only. `list_backups` accepts the new kinds.
 - **Multi-architecture Docker image** (`linux/amd64` and `linux/arm64`: Raspberry Pi, NAS, Apple Silicon servers), with an
   emulated arm64 smoke test in CI.
+- **`GET /metrics` (Prometheus).** Tool calls and latency per tool, audited writes by outcome, requests to CumulusMX and whether the
+  station is reachable, stored backups and whether write tools are enabled. Behind the same Bearer token as `/mcp` (the read-only
+  token works); no arguments or station data are exposed; `MCP_METRICS=false` removes it. New module `metrics` (no new dependency).
+- **Publishing to PyPI** (`pip install cumulusmx-mcp` / `uvx cumulusmx-mcp`) through the `Publish to PyPI` workflow with trusted
+  publishing (no stored token), triggered by the release tag and by the `Release` workflow. It builds and checks the package
+  always and uploads only when the repository variable `PYPI_PUBLISH` is `true`; one-time setup in CONTRIBUTING.md. CI also
+  builds the sdist and wheel and installs the wheel in a clean environment.
 - **Test coverage in CI** (job `coverage`, minimum 90 %, report in the run summary and as an artifact).
 
 ### Changed

@@ -25,6 +25,8 @@ TOKEN = os.environ.get("MCP_AUTH_TOKEN", "").encode()
 # Token opcional de solo lectura: permite consultar pero no ejecutar tools de escritura y enmascara los secretos.
 TOKEN_READONLY = os.environ.get("MCP_AUTH_TOKEN_READONLY", "").encode()
 PORT = int(os.environ.get("PORT", "8000"))
+# GET /metrics (formato Prometheus, requiere el mismo token Bearer). MCP_METRICS=false lo desactiva.
+METRICS_ENABLED = env_bool("MCP_METRICS", True)
 # Prefijo externo opcional (p.ej. detrás de un proxy que no reescribe bien la ruta, como Pangolin con "clip prefix").
 # Si llega /mcp-res/mcp lo tratamos como /mcp. Configurable por si el prefijo cambia; vacío = desactivado.
 STRIP_PREFIX = os.environ.get("MCP_STRIP_PREFIX", "/mcp-res")

@@ -1,7 +1,7 @@
 name: Release
 
 # Publicación manual de una versión: crea el tag vX.Y.Z y la GitHub Release (con las notas del CHANGELOG)
-# y lanza la construcción de las imágenes Docker de ese tag.
+# y lanza la construcción de las imágenes Docker y la publicación en PyPI de ese tag.
 # Uso: Actions -> Release -> Run workflow -> version = 1.5.0 (sin "v").
 # Alternativa equivalente: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z` (lo gestiona docker-publish.yml).
 
@@ -67,9 +67,11 @@ jobs:
           body_path: release-notes.md
           generate_release_notes: true
 
-      - name: Build and push Docker images for the new tag
-        # Los tags creados con GITHUB_TOKEN no disparan otros workflows: se lanza explícitamente (workflow_dispatch sí está permitido).
+      - name: Build and push Docker images and publish to PyPI for the new tag
+        # Los tags creados con GITHUB_TOKEN no disparan otros workflows: se lanzan explícitamente (workflow_dispatch sí está permitido).
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-        run: gh workflow run docker-publish.yml --ref "v$VERSION"
+        run: |
+          gh workflow run docker-publish.yml --ref "v$VERSION"
+          gh workflow run pypi-publish.yml --ref "v$VERSION"

@@ -2,11 +2,12 @@
 import asyncio
 import json
 import os
+import time
 from typing import Any
 
 import httpx
 
-from . import config
+from . import config, metrics
 from .config import logger
 
 
@@ -44,17 +45,34 @@ async def _api_request(
     req_headers = dict(headers or {})
     if isinstance(content, str):
         content = content.encode("utf-8")
-    return await cli.request(
-        method=method,
-        url=f"{config.BASE}{path}",
-        params=params,
-        content=content,
-        data=data,
-        json=json_data,
-        headers=req_headers,
-        auth=auth,
-        timeout=timeout,
-    )
+    started = time.monotonic()
+    try:
+        response = await cli.request(
+            method=method,
+            url=f"{config.BASE}{path}",
+            params=params,
+            content=content,
+            data=data,
+            json=json_data,
+            headers=req_headers,
+            auth=auth,
+            timeout=timeout,
+        )
+    except httpx.HTTPError:
+        _record_request(method, "conexion", started, up=False)
+        raise
+    ok = response.status_code < 400
+    _record_request(method, "ok" if ok else "http_error", started, up=response.status_code < 500)
+    return response
+
+
+def _record_request(method: str, outcome: str, started: float, up: bool) -> None:
+    """Métricas de cada petición a CumulusMX (un error 4xx sigue contando como estación alcanzable)."""
+    metrics.metric_inc("cumulusmx_mcp_cumulus_requests_total", method=method, resultado=outcome)
+    metrics.metric_observe("cumulusmx_mcp_cumulus_request_duration_seconds", time.monotonic() - started, method=method)
+    metrics.metric_gauge("cumulusmx_mcp_cumulus_up", 1 if up else 0)
+    if up:
+        metrics.metric_gauge("cumulusmx_mcp_cumulus_last_success_timestamp_seconds", time.time())
 
 
 async def _request_get(path: str, params: dict | None = None) -> httpx.Response:

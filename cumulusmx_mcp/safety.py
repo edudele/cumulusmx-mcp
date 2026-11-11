@@ -12,7 +12,7 @@ import json
 import os
 from typing import Any
 
-from . import config, utils
+from . import config, metrics, utils
 
 READONLY_MSG = "Error: este token es de solo lectura; las operaciones de escritura no están permitidas con él."
 _RECENT: collections.deque = collections.deque(maxlen=500)
@@ -94,6 +94,7 @@ def audit(tool: str, arguments: dict[str, Any], outcome: str, detail: Any = "") 
         "argumentos": {k: _shorten(v) for k, v in arguments.items()},
         "detalle": _shorten(detail, 300),
     }
+    metrics.metric_inc("cumulusmx_mcp_writes_total", tool=tool, resultado=outcome)
     try:
         line = json.dumps(record, ensure_ascii=False)
         config.audit_logger.info("AUDIT %s", line)

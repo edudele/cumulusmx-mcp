@@ -51,6 +51,11 @@ def _files() -> list[str]:
     return sorted(f for f in os.listdir(config.BACKUP_DIR) if f.endswith(".json"))
 
 
+def count() -> int:
+    """Número de copias conservadas."""
+    return len(_files())
+
+
 def _prune() -> None:
     files = _files()
     for old in files[: max(0, len(files) - config.BACKUP_KEEP)]:

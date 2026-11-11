@@ -19,6 +19,7 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Full CumulusMX API coverage** — read *and* write: every settings section (`get_settings` / `update_settings` with merge, `dry_run` preview and no blind writes), dedicated **MySQL** and **MQTT** tools (`get_/update_mysql_settings`, `mysql_table`, `get_/update_mqtt_settings`, `mysql_cache`), history corrections (`edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_records`), diary import/export, `interval_data` / `daily_data`, `records_query`, custom charts, WebSocket `live_sample` and HTTP station input. See [API coverage](#api-coverage).
 - **Safety net for the write tools** — every write is **audited** (log + optional JSON-Lines file, secrets masked), the previous state is **backed up automatically** and can be undone with `restore_backup`, and an optional **read-only token** lets others query the station without being able to change anything (it does not even see the write tools). See [Security model](#security-model).
 - **Alerts and reports** — `weather_alerts` (frost, wind, rain, heat, UV, pressure drop...) and `period_report` (a shareable Markdown weekly / monthly / yearly report compared with the station's own normals).
+- **Observable** — `GET /metrics` exposes Prometheus metrics: tool calls and latency, writes by outcome, requests to CumulusMX, whether the station is reachable, stored backups. See [Monitoring](#monitoring).
 - **Runs anywhere** — Docker, `pip`/`uvx`, or **stdio** for local clients such as Claude Desktop. Pinned dependencies, tested on FastMCP 3.x and 4.x and Python 3.10 - 3.13.
 - **Resilient** — GET requests to CumulusMX are retried with backoff on transient failures; timeouts are configurable.
 - **Agent-ready** — the server sends usage instructions to MCP clients (which tool for which question, units, decimal conventions, write-tool etiquette).
@@ -55,7 +56,7 @@ docker run -d \
 ### Python package (pip / uvx) and stdio
 
 ```bash
-pip install git+https://github.com/edudele/cumulusmx-mcp      # or: uvx --from git+https://github.com/edudele/cumulusmx-mcp cumulusmx-mcp
+pip install cumulusmx-mcp      # or: uvx cumulusmx-mcp   (development version: pip install git+https://github.com/edudele/cumulusmx-mcp)
 CUMULUSMX_URL=http://your-cumulusmx-host:8998 MCP_AUTH_TOKEN=secret cumulusmx-mcp           # HTTP on :8000
 cumulusmx-mcp --transport stdio                                                          # local MCP client (no HTTP, no token)
 ```
@@ -112,6 +113,7 @@ See [`.env.example`](.env.example) for all variables.
 | `CUMULUS_CACHE_TTL` | | `600` | In-memory cache TTL in seconds for current year dayfile data |
 | `CUMULUS_TIMEZONE` | | — | IANA time zone of the station (e.g. `Europe/Madrid`). Needed only to give readable dates (`2025-01-31 14:00`) to `interval_data` / `daily_data`; Unix seconds always work |
 | `CUMULUS_MASK_SECRETS` | | `false` | `true` masks passwords and keys (`pass`, `password`, `phpsecret`, API keys...) in `get_settings`, `get_mysql_settings` and `get_mqtt_settings`. Off by default: the server returns the configuration as CumulusMX does |
+| `MCP_METRICS` | | `true` | Serves Prometheus metrics at `GET /metrics` (same Bearer token as `/mcp`). `false` removes the endpoint |
 | `MCP_AUTH_TOKEN_READONLY` | | — | Second Bearer token that can **query but not write**: write tools refuse to run with it and settings are returned with passwords masked |
 | `CUMULUS_BACKUP_DIR` | | system temp dir | Where the pre-write backups are kept (`none` disables them). Mount a volume (the image uses `/data/backups`) to keep them across restarts |
 | `CUMULUS_BACKUP_KEEP` | | `200` | Maximum number of backups kept (the oldest are deleted) |
@@ -138,6 +140,7 @@ See [`.env.example`](.env.example) for all variables.
 | **`ENABLE_WRITE_TOOLS=false`** | The 29 write tools are not published at all. |
 | **Audit** | Each write is recorded (tool, token scope, arguments with secrets masked, result `ok` / `fallo` / `denegado` / `error`) in the log and, with `CUMULUS_AUDIT_FILE`, in a JSON-Lines file. `get_audit_log` shows the recent ones. |
 | **Backups and undo** | Before changing a settings section, a day-file line, an interval-log line, a recent-data record, a MySQL-cache statement or a record, the previous state is saved (`CUMULUS_BACKUP_DIR`, files `0600`). `list_backups` / `get_backup` / `restore_backup` undo it, and a restore is itself undoable. |
+| **Metrics** | `GET /metrics` (Prometheus text format) needs a Bearer token, unlike `/health`. It exposes counters and durations only (tool names and outcomes, requests to CumulusMX), never arguments or station data. |
 | **No blind writes** | Settings updates read the current section first and refuse to write if they cannot (the old classic updaters used to overwrite with only the fragment). `dry_run=true` previews the diff. |
 | **Secrets** | Passwords are returned by the settings tools unless `CUMULUS_MASK_SECRETS=true` or the read-only token is used. They never appear in the audit log. Backups can contain them, hence the `0600` permissions. |
 | **No outbound calls** | The server only talks to CumulusMX. FastMCP's update check against PyPI is disabled by default. |
@@ -419,6 +422,41 @@ python scripts/smoke_readonly.py https://your-domain/mcp-res/mcp YOUR_TOKEN
 
 ---
 
+## Monitoring
+
+`GET /health` (no token) is the liveness check. `GET /metrics` returns Prometheus metrics and needs the same Bearer token
+(the read-only token is enough). Example scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: cumulusmx-mcp
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: <MCP_AUTH_TOKEN_READONLY>
+    static_configs:
+      - targets: ["cumulusmx-mcp:8000"]
+```
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `cumulusmx_mcp_info{version}` | gauge | Server version (always 1) |
+| `cumulusmx_mcp_tool_calls_total{tool,resultado}` | counter | Tool calls (`ok` / `error`) |
+| `cumulusmx_mcp_tool_duration_seconds{tool}` | histogram | Tool call latency |
+| `cumulusmx_mcp_writes_total{tool,resultado}` | counter | Audited writes (`ok` / `fallo` / `denegado` / `error`) |
+| `cumulusmx_mcp_cumulus_requests_total{method,resultado}` | counter | Requests to CumulusMX (`ok` / `http_error` / `conexion`) |
+| `cumulusmx_mcp_cumulus_request_duration_seconds{method}` | histogram | CumulusMX request latency |
+| `cumulusmx_mcp_cumulus_up` | gauge | 1 if the last request to CumulusMX worked |
+| `cumulusmx_mcp_cumulus_last_success_timestamp_seconds` | gauge | Last successful request to CumulusMX |
+| `cumulusmx_mcp_backups_stored` | gauge | Backups kept in `CUMULUS_BACKUP_DIR` |
+| `cumulusmx_mcp_write_tools_enabled` | gauge | 1 if write tools are enabled |
+
+Useful alerts: `cumulusmx_mcp_cumulus_up == 0` for 5 minutes (station or network down),
+`increase(cumulusmx_mcp_writes_total{resultado="denegado"}[1h]) > 0` (someone tried to write with a read-only token).
+Counters live in memory and restart from zero with the process, which Prometheus handles natively.
+
+---
+
 ## Versioning and releases
 
 The project follows [Semantic Versioning](https://semver.org/) and keeps a [CHANGELOG](CHANGELOG.md).
@@ -432,11 +470,12 @@ To cut a release:
 2. Merge to `main` (publishes the `latest` Docker image).
 3. Run the **Release** workflow (Actions -> Release -> Run workflow, version `X.Y.Z`), or push the tag yourself
    (`git tag vX.Y.Z && git push origin vX.Y.Z`). It validates the version, creates the tag and the GitHub release with the
-   CHANGELOG notes, and publishes the `X.Y.Z`, `X.Y`, `X` and `latest` images to Docker Hub.
+   CHANGELOG notes, publishes the `X.Y.Z`, `X.Y`, `X` and `latest` multi-architecture images to Docker Hub and, once
+   PyPI trusted publishing is set up (see [CONTRIBUTING.md](CONTRIBUTING.md)), uploads the package to PyPI.
 
 CI (`.github/workflows/tests.yml`) runs on every pull request and on pushes to any branch except `main`: lint, the test
-suite on Python 3.10 / 3.12 / 3.13 with FastMCP 3.x and 4.x, a smoke test of the built Docker image and an informational
-dependency audit. Dependencies are pinned in `requirements.txt` and kept up to date by Dependabot.
+suite on Python 3.10 / 3.12 / 3.13 with FastMCP 3.x and 4.x (coverage must stay above 90 %), a build check of the
+package, smoke tests of the Docker image (amd64 and emulated arm64) and an informational dependency audit. Dependencies are pinned in `requirements.txt` and kept up to date by Dependabot.
 
 ---
 

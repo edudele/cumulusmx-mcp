@@ -7,9 +7,11 @@ from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware as ToolMiddleware
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
-from . import __version__, config, safety
+import time
+
+from . import __version__, backups, config, metrics, safety
 from .config import logger
 
 
@@ -68,7 +70,7 @@ Which tool:
   interval_data, daily_data.
 - Short ranges / intervals: graph_summary (prefer it over graph_data). Reports: noaa_report, simple_report.
 - Alerts now: weather_alerts. Shareable Markdown report (week/month/year): period_report.
-- Safety net: list_backups / restore_backup undo configuration and day-file edits; get_audit_log shows past writes.
+- Safety net: list_backups / restore_backup undo configuration, history and records edits; get_audit_log shows past writes.
 
 Conventions: dates are yyyy-mm-dd; day-file columns have Spanish names (temp_max, lluvia_total, racha_max...) and accept
 English aliases. get_tags/snapshot return plain numbers; text produced by CumulusMX itself (records, today/yesterday,
@@ -104,14 +106,41 @@ class ReadOnlyToolFilter(ToolMiddleware):
         return [t for t in tools if not self._writes(t)]
 
 
+class ToolCallMetrics(ToolMiddleware):
+    """Cuenta y mide cada llamada a una herramienta (resultado `error` si lanza una excepción)."""
+
+    async def on_call_tool(self, context, call_next):
+        started = time.monotonic()
+        name = getattr(context.message, "name", "?")
+        outcome = "ok"
+        try:
+            return await call_next(context)
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            metrics.metric_inc("cumulusmx_mcp_tool_calls_total", tool=name, resultado=outcome)
+            metrics.metric_observe("cumulusmx_mcp_tool_duration_seconds", time.monotonic() - started, tool=name)
+
+
 mcp = FastMCP("cumulusmx-mcp", version=__version__, instructions=SERVER_INSTRUCTIONS)
 mcp.add_middleware(ReadOnlyToolFilter())
+mcp.add_middleware(ToolCallMetrics())
 
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:
     """Comprobación de salud para Docker / orquestador (sin autenticación)."""
     return JSONResponse({"status": "healthy", "service": "cumulusmx-mcp", "version": __version__})
+
+
+if config.METRICS_ENABLED:
+    @mcp.custom_route("/metrics", methods=["GET"])
+    async def metrics_endpoint(request: Request) -> Response:
+        """Métricas Prometheus. Pasa por la autenticación Bearer (a diferencia de /health)."""
+        metrics.metric_gauge("cumulusmx_mcp_backups_stored", backups.count())
+        metrics.metric_gauge("cumulusmx_mcp_write_tools_enabled", 1 if config.WRITE_TOOLS_ENABLED else 0)
+        return Response(metrics.render_metrics(), media_type=metrics.CONTENT_TYPE)
 
 
 # Anotaciones MCP para categorización de permisos en clientes (Claude, etc.)

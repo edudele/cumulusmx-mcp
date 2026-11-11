@@ -11,6 +11,7 @@ Each module may import only modules **above it in this list** (a test enforces i
 ```
 config            environment variables and constants (read once)
 utils             pure helpers: dates, numbers, dict merge, secret masking
+metrics           Prometheus counters/histograms/gauges (exposed at GET /metrics by `app`)
 safety            write guard (ENABLE_WRITE_TOOLS, token scope) and audit trail
 backups           pre-write backups and their restoration
 client            HTTP client to CumulusMX: basic auth, retries, response clipping (valid JSON envelope when it truncates)
