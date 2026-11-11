@@ -19,6 +19,10 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+# Versión semántica del servidor. Debe coincidir con la cabecera de CHANGELOG.md
+# y con el tag de git (vX.Y.Z) que dispara la publicación de la imagen Docker.
+__version__ = "1.1.0"
+
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -75,13 +79,13 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
-mcp = FastMCP("cumulusmx-mcp")
+mcp = FastMCP("cumulusmx-mcp", version=__version__)
 
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:
     """Comprobación de salud para Docker / orquestador (sin autenticación)."""
-    return JSONResponse({"status": "healthy", "service": "cumulusmx-mcp"})
+    return JSONResponse({"status": "healthy", "service": "cumulusmx-mcp", "version": __version__})
 
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$")
@@ -733,14 +737,14 @@ async def rankings(
     variable: Literal["temp_min", "temp_max", "lluvia_total", "racha_max", "temp_media", "horas_sol"],
     top: int = 10,
     order: Literal["asc", "desc"] = "desc",
-    start_year: int = 2023,
+    start_year: int | None = None,
     end_year: int | None = None,
 ) -> str:
     """Ranking histórico de una variable meteorológica calculada sobre el dayfile.
     variable: 'temp_min', 'temp_max', 'lluvia_total', 'racha_max', 'temp_media', 'horas_sol'.
     top: número de posiciones a devolver (por defecto 10, máx 100).
     order: 'asc' o 'desc' (por defecto 'desc').
-    start_year: año de inicio (por defecto 2023).
+    start_year: año de inicio (por defecto CUMULUS_DATA_START_YEAR, 2023 si no se configura).
     end_year: año final (por defecto el año actual)."""
     valid_vars = ("temp_min", "temp_max", "lluvia_total", "racha_max", "temp_media", "horas_sol")
     if variable not in valid_vars:
@@ -748,6 +752,7 @@ async def rankings(
     if order not in ("asc", "desc"):
         raise ValueError("order debe ser 'asc' o 'desc'")
     current_year = _today().year
+    start_year = start_year if start_year is not None else DATA_START_YEAR
     end_y = end_year if end_year is not None else current_year
     if start_year > end_y:
         raise ValueError("start_year no puede ser posterior a end_year")
@@ -883,7 +888,8 @@ async def api_get(path: str, query: dict[str, str] | None = None) -> str:
 async def server_status() -> str:
     """Diagnóstico: comprueba que CumulusMX responde y devuelve su versión."""
     ver = await _get("/api/info/version.json")
-    return json.dumps({"mcp": "cumulusmx-mcp", "cumulusmx_version": ver}, ensure_ascii=False)
+    return json.dumps({"mcp": "cumulusmx-mcp", "mcp_version": __version__, "cumulusmx_version": ver},
+                      ensure_ascii=False)
 
 
 # ---------------------------------------------------------------- utilidades ----
@@ -1339,7 +1345,7 @@ if __name__ == "__main__":
     user = os.environ.get("CUMULUS_USER")
 
     logger.info("=" * 60)
-    logger.info("Iniciando cumulusmx-mcp en http://0.0.0.0:%s", PORT)
+    logger.info("Iniciando cumulusmx-mcp v%s en http://0.0.0.0:%s", __version__, PORT)
     logger.info("URL backend CumulusMX: %s", BASE)
     logger.info("Herramientas de escritura (ENABLE_WRITE_TOOLS): %s", is_write_enabled)
     logger.info("Basic Auth hacia CumulusMX: %s", f"configurada (usuario: {user})" if user else "desactivada")

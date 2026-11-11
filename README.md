@@ -25,6 +25,7 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Health check** — unauthenticated `/health` endpoint for Docker and monitoring orchestrators.
 - **Bearer token auth** — all MCP endpoints require `Authorization: Bearer ***`.
 - **Prefix stripping** — configurable middleware for reverse proxies that don't rewrite paths.
+- **Agent skill** — ready-to-use [`skills/cumulusmx-weather`](skills/cumulusmx-weather/SKILL.md) that teaches an agent when and how to use these tools (see [Agent skill](#agent-skill)).
 - **MCP Tool Annotations** — full `readOnlyHint` and `destructiveHint` annotations for client permission grouping (read-only vs write/delete in Claude and other clients).
 
 ---
@@ -77,8 +78,11 @@ See [`.env.example`](.env.example) for all variables.
 | `CUMULUS_CACHE_TTL` | | `600` | In-memory cache TTL in seconds for current year dayfile data |
 | `CUMULUS_USER` | | — | HTTP Basic Auth username for CumulusMX API (optional) |
 | `CUMULUS_PASSWORD` | | — | HTTP Basic Auth password for CumulusMX API (optional) |
-| `ENABLE_WRITE_TOOLS` | | `true` | Enable tools that modify data or station state (`false` to disable) |
+| `ENABLE_WRITE_TOOLS` | | `true` | Enable the 15 tools that modify data or station state (`false` makes the server effectively read-only) |
 | `LOG_LEVEL` | | `info` | Log verbosity: `info`, `debug`, `warning`, `error` |
+
+> **Security tip:** write tools are enabled by default. If you only need to query your station, set
+> `ENABLE_WRITE_TOOLS=false`. The 32 read-only tools keep working and the 15 write tools reply that writes are disabled.
 
 ---
 
@@ -87,7 +91,7 @@ See [`.env.example`](.env.example) for all variables.
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.1.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -231,6 +235,46 @@ Ready-to-use guided prompts for AI assistants:
 | `analisis_extremos` | `variable`, `top` | Historical extreme events comparison and ranking analysis |
 | `comparativa_periodos` | `start_a`, `end_a`, `start_b`, `end_b` | Period A vs Period B climate comparison |
 | `resumen_anual` | `year` | Comprehensive annual climate summary and milestone review |
+
+---
+
+## Agent skill
+
+The repository ships an agent skill in [`skills/cumulusmx-weather/`](skills/cumulusmx-weather/SKILL.md).
+The MCP server provides the tools; the skill tells the agent **when** to use each one (for example `rankings` for
+"hottest day ever", `graph_summary` instead of dumping thousands of points) and how to treat the write tools
+(always ask before changing the station).
+
+To use it with Claude Code, copy the folder into your skills directory:
+
+```bash
+cp -r skills/cumulusmx-weather ~/.claude/skills/
+```
+
+Other agents that support `SKILL.md` folders can load it from the same directory. The skill requires this MCP server to be connected.
+
+---
+
+## Versioning and releases
+
+The project follows [Semantic Versioning](https://semver.org/) and keeps a [CHANGELOG](CHANGELOG.md).
+The current version is defined once in `server.py` (`__version__`) and is reported by `GET /health`,
+the `server_status` tool and the startup log.
+
+To cut a release:
+
+1. Update `__version__` in `server.py` and add a `## [X.Y.Z]` section at the top of `CHANGELOG.md`
+   (`tests/test_versioning.py` fails if they differ). Also update `metadata.version` in the skill's `SKILL.md`.
+2. Merge to `main` (publishes the `latest` Docker image).
+3. Tag the release: `git tag vX.Y.Z && git push origin vX.Y.Z`. The workflow checks that the tag matches
+   `__version__` and publishes `X.Y.Z`, `X.Y`, `X` and `latest` images to Docker Hub.
+
+Tests run on every pull request and on pushes to any branch except `main` (`.github/workflows/tests.yml`):
+
+```bash
+pip install "fastmcp>=3,<5" httpx pytest pytest-asyncio
+MCP_AUTH_TOKEN=test python -m pytest -q
+```
 
 ---
 

@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install "fastmcp>=3,<5" httpx pytest pytest-asyncio
+
+      - name: Run tests
+        env:
+          MCP_AUTH_TOKEN: ci-test-token
+        run: python -m pytest -q

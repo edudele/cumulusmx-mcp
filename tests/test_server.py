@@ -184,7 +184,7 @@ class TestHealthEndpoint:
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data == {"status": "healthy", "service": "cumulusmx-mcp"}
+        assert data == {"status": "healthy", "service": "cumulusmx-mcp", "version": server.__version__}
 
     def test_health_head_method(self, client):
         """Verifica que HEAD /health responde 200 OK sin cabecera Authorization."""
@@ -196,7 +196,7 @@ class TestHealthEndpoint:
         prefix = server.STRIP_PREFIX.rstrip("/")
         resp = client.get(f"{prefix}/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "healthy", "service": "cumulusmx-mcp"}
+        assert resp.json() == {"status": "healthy", "service": "cumulusmx-mcp", "version": server.__version__}
 
 
 # =====================================================================
