@@ -83,7 +83,7 @@ See [`.env.example`](.env.example) for all variables.
 | `LOG_LEVEL` | | `info` | Log verbosity: `info`, `debug`, `warning`, `error` |
 
 > **Security tip:** write tools are enabled by default. If you only need to query your station, set
-> `ENABLE_WRITE_TOOLS=false`. The 36 read-only tools keep working and the 15 write tools reply that writes are disabled.
+> `ENABLE_WRITE_TOOLS=false`. The 38 read-only tools keep working and the 15 write tools reply that writes are disabled.
 
 ---
 
@@ -92,7 +92,7 @@ See [`.env.example`](.env.example) for all variables.
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.2.0"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.3.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -168,6 +168,8 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 | `get_tags` | Query CumulusMX webtags by name |
 | `render_template` | Evaluate custom webtag templates with formatting modifiers |
 | `diary` | Weather diary entries or summary |
+| `simple_report` | CumulusMX summary reports over the whole history: temperature, rainfall, wind run, sunshine, ET, dry/wet days |
+| `extra_sensors` | Current values of extra sensors: soil, leaf wetness, AirLink air quality, lightning, CO2, laser depth, snow... |
 | `api_get` | Low-level whitelisted read-only access to CumulusMX GET endpoints |
 
 ### System & Maintenance (/utils/*)

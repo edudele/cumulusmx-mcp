@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.3.0]
+
+Endpoints and names below were verified against the CumulusMX source (`Api.cs`) rather than assumed.
+
+### Added
+- `simple_report`: the seven built-in CumulusMX summary reports (`simpleTemperature`, `simpleRainfall`,
+  `simpleWindRun`, `simpleSunshine`, `simpleET`, `simpleDryDays`, `simpleWetDays`).
+- `extra_sensors`: current values of the 22 extra-sensor endpoints (soil, leaf wetness, AirLink, lightning, CO2, laser depth, snow, BGT...).
+
+### Fixed
+- `api_get` whitelist only allowed lower-case report names, so `reports/simpleTemperature` and the other
+  `simple*` reports were rejected. The whitelist now accepts them (settings, utils and report-generation paths stay blocked, with tests).
+
+### Changed
+- `graph_data` and `daily_graph_data` descriptions list the full set of series names CumulusMX provides
+  (including extra-sensor and per-interval series) instead of a partial list.
+- The skill documents the new tools; the tool count is now 53 (38 read-only, 15 write).
+
 ## [1.2.0]
 
 ### Added

@@ -1,6 +1,6 @@
 # cumulusmx-mcp reference
 
-Parameter notes for the 51 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
+Parameter notes for the 53 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
 
 ## Read-only tools
 
@@ -30,9 +30,11 @@ Parameter notes for the 51 tools of cumulusmx-mcp. Tool names are in backticks i
 | `records_all` | Same scopes, all five kinds in one call. `strip_html` (default true). |
 | `records_period` | `startdate`, `enddate`, both `yyyy-mm-dd`, years 2000-2050. |
 | `graph_summary` | `name` (for example `tempdata`, `winddata`, `raindata`, `pressdata`, `humdata`, `solardata`, `wdirdata`, or `intvtemp`, `intvwind`, `intvrain`, `intvpress`, `intvhum`, `intvsolar`), optional `start`/`end`, `points` (0-300) to include a downsampled series. Timestamps are UTC. |
-| `graph_data` | Raw series for the same names plus `dailyrain`, `sunhours`, `dailytemp`, `units`, `availabledata`. Large output. |
-| `daily_graph_data` | Daily series such as `tempdata`, `raindata`, `degdaydata`, `tempsumdata`, `chillhrsdata`. Whole history, large output. |
+| `graph_data` | Raw series. Names: `tempdata`, `winddata`, `raindata`, `pressdata`, `wdirdata`, `humdata`, `solardata`, `airqualitydata`, `extratemp`, `extrahum`, `extradew`, `soiltemp`, `soilmoist`, `soilec`, `leafwetness`, `usertemp`, `co2sensor`, `laserdepth`, `snow24h`; daily: `dailyrain`, `sunhours`, `dailytemp`; meta: `units`, `graphconfig`, `availabledata`; per interval with `start`/`end`: `intvtemp`, `intvwind`, `intvrain`, `intvpress`, `intvhum`, `intvsolar` and `intv` + the extra-sensor names above. Large output. |
+| `daily_graph_data` | Daily series: `tempdata`, `winddata`, `raindata`, `pressdata`, `wdirdata`, `humdata`, `solardata`, `degdaydata`, `dailysnow`, `tempsumdata`, `chillhrsdata`. Whole history, large output. |
 | `noaa_report` | `period`: `noaayear` or `noaamonth`, `year`, `month`. Plain text. |
+| `simple_report` | `report`: `temperature`, `rainfall`, `windrun`, `sunshine`, `et`, `drydays`, `wetdays`; `text` (default true; false returns HTML). CumulusMX summary tables built from the whole day file, in the station's units. Large output: summarize it. |
+| `extra_sensors` | `sensor`: `temp`, `hum`, `dew`, `soiltemp`, `soilmoisture`, `soilec`, `leaf8`, `airqual`, `lightning`, `usertemp`, `laserdepth`, `laserdistance`, `snow24h`, `snowseason`, `airLinkCountsOut`, `airLinkAqiOut`, `airLinkPctOut`, `airLinkCountsIn`, `airLinkAqiIn`, `airLinkPctIn`, `co2sensor`, `bgt`. Current values; only sensors configured on the station return data. |
 | `diary` | Without `date`: summary of days with notes. With `date`: that entry. |
 | `get_tags` | `tags`: up to 50 webtag names (letters, digits, underscore), for example `["temp", "hum", "press"]`. |
 | `render_template` | A webtag template up to 1000 characters that contains `<#tag ...>` markers, for example `<#temp dp=2> <#time format="HH:mm">`. |

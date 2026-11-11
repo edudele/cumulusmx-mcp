@@ -307,3 +307,68 @@ class TestThroughMcpClient:
             async with Client(server.mcp) as client:
                 with pytest.raises(ToolError):
                     await client.call_tool("count_days", {"variable": "temp_max", "op": "!=", "value": 1})
+
+
+# ---------------------------------------------------------------- informes simples y sensores extra ----
+
+class TestSimpleReportsAndExtraSensors:
+    @pytest.mark.asyncio
+    async def test_simple_report_maps_names_and_requests_text(self):
+        mock = AsyncMock(return_value="informe")
+        with patch.object(server, "_get", new=mock):
+            assert await server.simple_report("temperature") == "informe"
+            mock.assert_awaited_with("/api/reports/simpleTemperature", {"format": "text"})
+            await server.simple_report("windrun", text=False)
+            mock.assert_awaited_with("/api/reports/simpleWindRun", None)
+            await server.simple_report("et")
+            mock.assert_awaited_with("/api/reports/simpleET", {"format": "text"})
+
+    @pytest.mark.asyncio
+    async def test_simple_report_rejects_unknown_report(self):
+        with pytest.raises(ValueError):
+            await server.simple_report("humedad")  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_extra_sensors_builds_path_and_keeps_case(self):
+        mock = AsyncMock(return_value="{}")
+        with patch.object(server, "_get", new=mock):
+            await server.extra_sensors("airLinkAqiOut")
+            mock.assert_awaited_with("/api/extra/airLinkAqiOut.json")
+            await server.extra_sensors("soilmoisture")
+            mock.assert_awaited_with("/api/extra/soilmoisture.json")
+
+    @pytest.mark.asyncio
+    async def test_extra_sensors_rejects_unknown_sensor(self):
+        with pytest.raises(ValueError):
+            await server.extra_sensors("../../settings/programdata")  # type: ignore[arg-type]
+
+    def test_every_extra_sensor_matches_api_get_whitelist(self):
+        for name in server.EXTRA_SENSORS:
+            assert server.ALLOWED_GET.fullmatch(f"/api/extra/{name}.json"), name
+
+    def test_every_simple_report_matches_api_get_whitelist(self):
+        """Regresión: antes la lista blanca solo admitía minúsculas y bloqueaba simpleTemperature, etc."""
+        for api_name in server.SIMPLE_REPORTS.values():
+            assert server.ALLOWED_GET.fullmatch(f"/api/reports/{api_name}"), api_name
+        assert server.ALLOWED_GET.fullmatch("/api/reports/noaayear")
+
+    def test_api_get_whitelist_still_blocks_sensitive_paths(self):
+        for bad in ("/api/settings/programdata.json", "/api/settings/internetdata.json", "/api/utils/reloaddayfile",
+                    "/api/genreports/noaayear", "/api/reports/../settings/programdata.json"):
+            assert not server.ALLOWED_GET.fullmatch(bad), bad
+
+    @pytest.mark.asyncio
+    async def test_new_tools_through_mcp_client(self):
+        from fastmcp import Client
+
+        mock = AsyncMock(return_value="ok")
+        with patch.object(server, "_get", new=mock):
+            async with Client(server.mcp) as client:
+                res = await client.call_tool("simple_report", {"report": "rainfall"})
+                assert res.content[0].text == "ok"
+                mock.assert_awaited_with("/api/reports/simpleRainfall", {"format": "text"})
+                res = await client.call_tool("extra_sensors", {"sensor": "leaf8"})
+                assert res.content[0].text == "ok"
+                from fastmcp.exceptions import ToolError
+                with pytest.raises(ToolError):
+                    await client.call_tool("extra_sensors", {"sensor": "programdata"})

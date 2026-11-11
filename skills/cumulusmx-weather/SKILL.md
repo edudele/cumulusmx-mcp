@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   server: cumulusmx-mcp
 ---
 
@@ -36,6 +36,8 @@ Never invent weather values. Every number you report must come from a tool resul
 | Records inside a custom date range | `records_period` |
 | Min/max/avg of last 24 h or an interval | `graph_summary` (avoid `graph_data`, it returns thousands of points) |
 | Official-style monthly/annual report | `noaa_report` |
+| Whole-history summary tables (temperature, rainfall, wind run, sunshine, ET, dry/wet days) | `simple_report` |
+| Soil, leaf, air-quality (AirLink), lightning, CO2 or other extra sensors | `extra_sensors` |
 | Is the station / MCP healthy? | `ping`, `server_status`, `get_error_log` |
 
 Full parameter notes, column names and units are in [reference.md](reference.md).

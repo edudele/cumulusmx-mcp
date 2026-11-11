@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse
 
 # Versión semántica del servidor. Debe coincidir con la cabecera de CHANGELOG.md
 # y con el tag de git (vX.Y.Z) que dispara la publicación de la imagen Docker.
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 logging.basicConfig(
@@ -293,9 +293,14 @@ async def today_yesterday(kind: Literal["temp", "hum", "rain", "wind", "pressure
 
 @mcp.tool(annotations=READ_ONLY)
 async def graph_data(name: str, start: str = "", end: str = "") -> str:
-    """Serie temporal para gráficos. name: tempdata, winddata, raindata, pressdata, humdata, solardata,
-    wdirdata, dailyrain, sunhours, dailytemp, units, availabledata...
-    start/end opcionales: 'yyyy-MM-dd' o 'yyyy-MM-dd HH:mm' (hora local)."""
+    """Serie temporal para gráficos (últimas ~24 h por defecto). name (sin .json):
+    tempdata, winddata, raindata, pressdata, wdirdata, humdata, solardata, airqualitydata, extratemp, extrahum,
+    extradew, soiltemp, soilmoist, soilec, leafwetness, usertemp, co2sensor, laserdepth, snow24h;
+    diarias: dailyrain, sunhours, dailytemp; meta: units, graphconfig, availabledata;
+    por intervalo (con start/end): intvtemp, intvwind, intvrain, intvpress, intvhum, intvsolar, intvairquality,
+    intvextratemp, intvextrahum, intvextradew, intvsoiltemp, intvsoilmoist, intvsoilec, intvleafwetness,
+    intvusertemp, intvco2sensor, intvlaserdepth, intvsnow24h. Las series de sensores extra solo existen si el
+    sensor está configurado. start/end opcionales: 'yyyy-MM-dd' o 'yyyy-MM-dd HH:mm' (hora local)."""
     if not re.fullmatch(r"[a-z0-9]{3,30}", name):
         raise ValueError("name inválido")
     params = {}
@@ -309,7 +314,8 @@ async def graph_data(name: str, start: str = "", end: str = "") -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 async def daily_graph_data(name: str) -> str:
-    """Series diarias: tempdata, winddata, raindata, pressdata, humdata, solardata, degdaydata, tempsumdata, chillhrsdata..."""
+    """Series diarias de todo el histórico. name (sin .json): tempdata, winddata, raindata, pressdata, wdirdata,
+    humdata, solardata, degdaydata, dailysnow, tempsumdata, chillhrsdata, units, graphconfig."""
     if not re.fullmatch(r"[a-z0-9]{3,30}", name):
         raise ValueError("name inválido")
     return await _get(f"/api/dailygraphdata/{name}.json")
@@ -1115,11 +1121,52 @@ async def diary(date: str = "") -> str:
     return await _get("/api/data/diarysummary")
 
 
+SIMPLE_REPORTS: dict[str, str] = {
+    "temperature": "simpleTemperature", "rainfall": "simpleRainfall", "windrun": "simpleWindRun",
+    "sunshine": "simpleSunshine", "et": "simpleET", "drydays": "simpleDryDays", "wetdays": "simpleWetDays",
+}
+
+EXTRA_SENSORS: tuple[str, ...] = (
+    "temp", "hum", "dew", "soiltemp", "soilmoisture", "soilec", "leaf8", "airqual", "lightning", "usertemp",
+    "laserdepth", "laserdistance", "snow24h", "snowseason", "airLinkCountsOut", "airLinkAqiOut", "airLinkPctOut",
+    "airLinkCountsIn", "airLinkAqiIn", "airLinkPctIn", "co2sensor", "bgt",
+)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def simple_report(
+    report: Literal["temperature", "rainfall", "windrun", "sunshine", "et", "drydays", "wetdays"],
+    text: bool = True,
+) -> str:
+    """Informes resumen de CumulusMX calculados sobre todo el histórico diario (mes a mes por año):
+    temperature, rainfall, windrun, sunshine, et (evapotranspiración), drydays y wetdays (días secos/lluviosos
+    según el umbral de lluvia de la estación). text=True devuelve texto plano; False, HTML.
+    Respeta las unidades y decimales configurados en CumulusMX."""
+    if report not in SIMPLE_REPORTS:
+        raise ValueError(f"report debe ser uno de {sorted(SIMPLE_REPORTS)}")
+    return await _get(f"/api/reports/{SIMPLE_REPORTS[report]}", {"format": "text"} if text else None)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def extra_sensors(sensor: Literal[
+    "temp", "hum", "dew", "soiltemp", "soilmoisture", "soilec", "leaf8", "airqual", "lightning", "usertemp",
+    "laserdepth", "laserdistance", "snow24h", "snowseason", "airLinkCountsOut", "airLinkAqiOut", "airLinkPctOut",
+    "airLinkCountsIn", "airLinkAqiIn", "airLinkPctIn", "co2sensor", "bgt",
+]) -> str:
+    """Valores actuales de los sensores extra de CumulusMX: temp/hum/dew (extra), soiltemp, soilmoisture, soilec,
+    leaf8 (humectación foliar), airqual, lightning, usertemp, laserdepth/laserdistance, snow24h/snowseason,
+    airLink* (calidad del aire Davis AirLink, exterior 'Out' / interior 'In'), co2sensor y bgt (globo negro).
+    Solo devuelve datos de los sensores que estén configurados en la estación."""
+    if sensor not in EXTRA_SENSORS:
+        raise ValueError(f"sensor debe ser uno de {list(EXTRA_SENSORS)}")
+    return await _get(f"/api/extra/{sensor}.json")
+
+
 ALLOWED_GET = re.compile(
     r"^/api/(data/(currentdata|dayfile|logfile|extralogfile|recentdata|diarydata|diarysummary)"
     r"|tags/process\.json|graphdata/[a-z0-9]+\.json|dailygraphdata/[a-z0-9]+\.json"
     r"|records/[a-z0-9/]+\.json|todayyest/[a-z]+\.json|extra/[A-Za-z0-9_.]+|info/[a-z]+\.json"
-    r"|reports/[a-z0-9]+)$")
+    r"|reports/[A-Za-z0-9]+)$")
 
 
 @mcp.tool(annotations=READ_ONLY)
