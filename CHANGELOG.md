@@ -88,7 +88,6 @@ Endpoints and names below were verified against the CumulusMX source (`Api.cs`) 
   Compatible with the Agent Skills format used by Claude Code and other agents.
 - `__version__` in `server.py`, reported by the MCP server itself, by `server_status` (`mcp_version`),
   by `GET /health` (`version`) and in the startup log.
-- Tool annotations `readOnlyHint` / `destructiveHint` on every tool (client-side permission grouping).
 - Tests that keep the release coherent: `CHANGELOG.md` and `__version__` must match, and the skill must document
   every registered tool.
 
@@ -96,6 +95,12 @@ Endpoints and names below were verified against the CumulusMX source (`Api.cs`) 
 - `rankings`: when `start_year` is omitted it now defaults to `CUMULUS_DATA_START_YEAR`
   (previously a hard-coded 2023 ignored that setting).
 - `GET /health` now also returns the `version` field (existing fields are unchanged).
+
+## [1.0.1]
+
+### Added
+- Tool annotations `readOnlyHint` / `destructiveHint` on every tool (client-side permission grouping in Claude and
+  other MCP clients).
 
 ## [1.0.0]
 
