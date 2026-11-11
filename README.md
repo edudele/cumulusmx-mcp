@@ -15,6 +15,9 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Current conditions** — temperature, humidity, pressure, wind, rain, solar/UV in real time.
 - **Today / yesterday** — highs, lows and times for all variables.
 - **Historical data & Analytics** — daily summaries from dayfile across all years, flexible column alias filtering (`date`, `mintemp`, `rain`, etc.) and aggregated statistical summaries (`summary_only`).
+- **Agronomy & climate tools** — `climatology` (monthly normals), `frost_dates` (last spring / first autumn frost, frost-free period), `degree_days` (growing degree days), `wind_rose` (16-point rose) and `daily_briefing` (live conditions + yesterday in context + month vs normal + streaks in progress).
+- **Resilient** — GET requests to CumulusMX are retried with backoff on transient failures; timeouts are configurable.
+- **Agent-ready** — the server sends usage instructions to MCP clients (which tool for which question, units, decimal conventions, write-tool etiquette).
 - **Climate analytics** — `count_days`, `find_streaks`, `anomaly` and `data_quality` answer "how many days above 35 °C?", "longest dry spell?", "was this July warmer than normal?" and "can I trust the history?" from the station's own data, with no extra CumulusMX endpoints.
 - **Historical rankings & Annual records** — competition rankings (1, 2, 2, 4) for extremes (heat, cold, rain, wind gusts) and yearly records summaries.
 - **MCP Resources** — declarative `weather://` resources for direct context retrieval in MCP clients.
@@ -77,13 +80,16 @@ See [`.env.example`](.env.example) for all variables.
 | `CUMULUS_DATA_START_YEAR` | | `2023` | First year of station data for caching and default rankings range |
 | `CUMULUS_FROST_THRESHOLD` | | `0.0` | Temperature threshold (°C) to count frost days |
 | `CUMULUS_CACHE_TTL` | | `600` | In-memory cache TTL in seconds for current year dayfile data |
+| `CUMULUS_TIMEOUT` | | `30` | Timeout in seconds for each request to CumulusMX |
+| `CUMULUS_RETRIES` | | `2` | Retries (exponential backoff) of GET requests on connection errors, timeouts and HTTP 502/504. POST requests are never retried |
 | `CUMULUS_USER` | | — | HTTP Basic Auth username for CumulusMX API (optional) |
 | `CUMULUS_PASSWORD` | | — | HTTP Basic Auth password for CumulusMX API (optional) |
-| `ENABLE_WRITE_TOOLS` | | `true` | Enable the 15 tools that modify data or station state (`false` makes the server effectively read-only) |
+| `ENABLE_WRITE_TOOLS` | | `true` | Publish the 15 tools that modify data or station state. With `false` they are not even listed to the client (read-only server) |
 | `LOG_LEVEL` | | `info` | Log verbosity: `info`, `debug`, `warning`, `error` |
 
 > **Security tip:** write tools are enabled by default. If you only need to query your station, set
-> `ENABLE_WRITE_TOOLS=false`. The 38 read-only tools keep working and the 15 write tools reply that writes are disabled.
+> `ENABLE_WRITE_TOOLS=false`: the 15 write tools are then **not published at all** (clients only see the 43 read-only
+> tools), and they would refuse to run even if called directly.
 
 ---
 
@@ -92,7 +98,7 @@ See [`.env.example`](.env.example) for all variables.
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.3.0"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.5.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -156,6 +162,11 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 | `find_streaks` | Longest runs of consecutive days matching a condition (dry spells, heatwaves, frost runs) and any run in progress |
 | `anomaly` | Compare a period with the station's own climatology (same calendar window in other years): normal, difference, percentile, rank |
 | `data_quality` | Audit the daily history: missing days, days without temperature, incoherent values |
+| `climatology` | Monthly normals (Jan-Dec): mean temperatures, rain, rain days, sun hours, extremes and record years |
+| `frost_dates` | Per year: last spring frost, first autumn frost, frost days and frost-free period; average dates |
+| `degree_days` | Growing degree days (base/upper temperature, `average` or `modified` method) per month and year |
+| `wind_rose` | Days per dominant wind direction (16 sectors) and peak gust per gust direction |
+| `daily_briefing` | One-call daily overview: now, yesterday vs same month in other years, month-to-date anomaly, streaks in progress |
 | `logfile` | Interval log for a date range (standard or extra sensors) |
 | `records` | Records by scope (`alltime`, `thismonth`, `thisyear`, `month`) and variable |
 | `records_all` | All record categories in one single call |
@@ -242,6 +253,9 @@ Ready-to-use guided prompts for AI assistants:
 | `analisis_extremos` | `variable`, `top` | Historical extreme events comparison and ranking analysis |
 | `comparativa_periodos` | `start_a`, `end_a`, `start_b`, `end_b` | Period A vs Period B climate comparison |
 | `resumen_anual` | `year` | Comprehensive annual climate summary and milestone review |
+| `resumen_mensual` | `year`, `month` | Month report versus the station's own climatology |
+| `heladas_y_cultivo` | `base_temp` (optional) | Frost dates and growing degree days for garden planning |
+| `auditoria_datos` | — | Data-quality audit of the history before analysing it |
 
 ---
 

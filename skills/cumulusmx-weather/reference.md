@@ -1,6 +1,6 @@
 # cumulusmx-mcp reference
 
-Parameter notes for the 53 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
+Parameter notes for the 58 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
 
 ## Read-only tools
 
@@ -22,6 +22,11 @@ Parameter notes for the 53 tools of cumulusmx-mcp. Tool names are in backticks i
 | `find_streaks` | Same condition as `count_days` plus `min_length` (default 2) and `top` (1-50). Longest runs of consecutive days, and `racha_en_curso` if a run ends on the last day with data. Dry spell: `rain < 0.2`; heatwave: `temp_max >= 35`; frost: `temp_min <= 0`. A day without data breaks a run. |
 | `anomaly` | `start`, `end`, `variable` (default `temp_media`), optional `baseline_start_year` / `baseline_end_year`. Compares the period with the same calendar window in the other years: `valor`, `normal`, `diferencia`, `diferencia_pct` (accumulated variables only), `percentil`, `posicion_entre_anios`, `por_anio`. Rain and sun hours are summed, others averaged. In-progress periods are compared on the elapsed part only. Years with under 80 % coverage are skipped; with fewer than 3 reference years a warning is returned. |
 | `data_quality` | Optional `start`/`end`, `max_items`. Missing days, days without temperature and incoherent values (min > max, humidity outside 0-100, negative rain or sun). Run it before trusting records or long-term comparisons. |
+| `climatology` | Optional `start_year` (default: server `CUMULUS_DATA_START_YEAR`), `end_year`. Per calendar month: `n_anios`, mean temperature/max/min, mean rain and rain days, mean sun hours, absolute max/min and gust with year, warmest/coldest/wettest/driest month with year. Only months with at least 80 % of days with data count. |
+| `frost_dates` | Optional `threshold` (default 0; frost = `temp_min <= threshold`), `start_year`, `end_year`, `hemisphere` (`north`: spring = Jan-Jun, autumn = Jul-Dec; `south`: first and last frost of the calendar year). Per year: `ultima_helada_primavera`, `primera_helada_otono`, `dias_helada`, `periodo_sin_heladas_dias` (north only), `parcial`; plus `fecha_media` (MM-DD) from complete years only. Advise a safe date, not the mean. |
+| `degree_days` | Optional `start`/`end` (default: 1 January of this year to the last day with data), `base` (default 10), `upper`, `method` (`average`, or `modified` which floors tmin at `base` and caps tmax at `upper`). Totals overall, `por_mes`, `por_anio`, in the station's temperature units. |
+| `wind_rose` | Optional `start`/`end`. 16 sectors with days and percentage of the dominant daily direction, plus the peak gust per gust direction. A bearing of 0 can mean calm. |
+| `daily_briefing` | No parameters. `ahora` (live tags, plain numbers), `datos_hasta` (last closed day), `ultimo_dia_cerrado_en_contexto` (percentile/rank of its Tmax, Tmin and rain vs the same month in other years), `mes_en_curso` (month-to-date anomaly of temperature and rain), `rachas_en_curso` (dry, Tmax >= 30, frost). Warns when the history is stale and degrades when live data or history is unavailable. |
 | `monthly_summary` | `year` (2000-2050). One aggregate per month that has data. |
 | `compare_periods` | `start_a`, `end_a`, `start_b`, `end_b`. Returns `{"A": ..., "B": ...}` with the `climate_summary` statistics. |
 | `year_records` | `year`. Extremes, rain totals, wettest day, frost days, warm days (>=25 and >=30 C). Errors if the year has no data. |

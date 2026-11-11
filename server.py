@@ -1,5 +1,7 @@
 """MCP para CumulusMX (lectura, escritura, informes y mantenimiento). Habla con su API HTTP por la red interna."""
 import asyncio
+import calendar
+import collections
 import datetime
 import hmac
 import html
@@ -22,7 +24,7 @@ from starlette.responses import JSONResponse
 
 # Versión semántica del servidor. Debe coincidir con la cabecera de CHANGELOG.md
 # y con el tag de git (vX.Y.Z) que dispara la publicación de la imagen Docker.
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 logging.basicConfig(
@@ -43,6 +45,11 @@ DATA_START_YEAR = int(os.environ.get("CUMULUS_DATA_START_YEAR", "2023"))
 FROST_THRESHOLD = float(os.environ.get("CUMULUS_FROST_THRESHOLD", "0.0"))
 WARM_THRESHOLDS = (25.0, 30.0)
 CURRENT_YEAR_TTL_S = int(os.environ.get("CUMULUS_CACHE_TTL", "600"))
+# Peticiones GET a CumulusMX: timeout por intento y reintentos ante fallos transitorios (conexión, timeout, 502/504).
+CUMULUS_TIMEOUT = float(os.environ.get("CUMULUS_TIMEOUT", "30"))
+CUMULUS_RETRIES = max(0, int(os.environ.get("CUMULUS_RETRIES", "2")))
+RETRY_STATUS = frozenset({502, 504})
+RETRY_BACKOFF_S = 0.3
 
 
 class StripPrefix:
@@ -80,7 +87,27 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
-mcp = FastMCP("cumulusmx-mcp", version=__version__)
+SERVER_INSTRUCTIONS = """\
+MCP server for a CumulusMX weather station. Never invent weather values: every number must come from a tool.
+
+Which tool:
+- Now: snapshot (compact) or current_data. Today vs yesterday: today_all. Full morning overview: daily_briefing.
+- History (daily): count_days, find_streaks, rankings, climate_summary, monthly_summary, year_records,
+  compare_periods, dayfile_range (use summary_only=true first). Normals and anomalies: climatology, anomaly.
+- Gardening/agronomy: frost_dates, degree_days. Wind: wind_rose. Trustworthiness of the data: data_quality.
+- Short ranges / intervals: graph_summary (prefer it over graph_data). Reports: noaa_report, simple_report.
+
+Conventions: dates are yyyy-mm-dd; day-file columns have Spanish names (temp_max, lluvia_total, racha_max...) and accept
+English aliases. get_tags/snapshot return plain numbers; text produced by CumulusMX itself (records, today/yesterday,
+reports) follows the station's regional format and may use decimal commas ("10,0" = 10.0). CumulusMX uses -9999/9999
+for "no data" and 0 % humidity is almost always a sensor fault: run data_quality before quoting extremes.
+
+Write tools (edit_*, update_*, clear_*, trigger_*, generate_/upload_reports...) change the station: describe the change
+and get explicit confirmation first; read the current settings before updating them. They are absent when the server
+runs with ENABLE_WRITE_TOOLS=false.
+"""
+
+mcp = FastMCP("cumulusmx-mcp", version=__version__, instructions=SERVER_INSTRUCTIONS)
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -100,6 +127,16 @@ WRITE_DISABLED_MSG = "Error: Las operaciones de modificación/escritura están d
 # Anotaciones MCP para categorización de permisos en clientes (Claude, etc.)
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False}
 WRITE_ACTION = {"readOnlyHint": False, "destructiveHint": True}
+
+WRITE_TOOLS_ENABLED = os.environ.get("ENABLE_WRITE_TOOLS", "true").strip().lower() not in ("false", "0", "no", "off")
+
+
+def write_tool(fn):
+    """Registra una tool que modifica la estación. Si el servidor arranca con ENABLE_WRITE_TOOLS=false la tool ni
+    siquiera se publica (el cliente no la ve). Además cada tool sigue comprobando _check_write_enabled() al ejecutarse."""
+    if not WRITE_TOOLS_ENABLED:
+        return fn
+    return mcp.tool(annotations=WRITE_ACTION)(fn)
 
 
 def _check_write_enabled() -> str | None:
@@ -153,6 +190,25 @@ async def _api_request(
     )
 
 
+async def _request_get(path: str, params: dict | None = None) -> httpx.Response:
+    """GET con reintentos (máx. CUMULUS_RETRIES) ante errores de conexión, timeouts y 502/504. Los POST no se
+    reintentan nunca (no son idempotentes). Backoff exponencial corto: 0,3 s, 0,6 s..."""
+    for attempt in range(CUMULUS_RETRIES + 1):
+        last = attempt == CUMULUS_RETRIES
+        try:
+            r = await _api_request("GET", path, params=params, timeout=CUMULUS_TIMEOUT)
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            if last:
+                raise
+            logger.warning("GET %s falló (%s); reintento %d/%d", path, type(e).__name__, attempt + 1, CUMULUS_RETRIES)
+        else:
+            if r.status_code not in RETRY_STATUS or last:
+                return r
+            logger.warning("GET %s devolvió %s; reintento %d/%d", path, r.status_code, attempt + 1, CUMULUS_RETRIES)
+        await asyncio.sleep(RETRY_BACKOFF_S * 2 ** attempt)
+    raise RuntimeError("inalcanzable")  # pragma: no cover
+
+
 def _clip(t: str) -> str:
     if len(t) > MAX_CHARS:
         return t[:MAX_CHARS] + f"\n…[truncado: {len(t)} caracteres; usa rangos más pequeños o downsample]"
@@ -161,7 +217,7 @@ def _clip(t: str) -> str:
 
 async def _get(path: str, params: dict | None = None) -> str:
     try:
-        r = await _api_request("GET", path, params=params)
+        r = await _request_get(path, params)
         r.raise_for_status()
         return _clip(r.text)
     except httpx.HTTPStatusError as e:
@@ -172,7 +228,7 @@ async def _get(path: str, params: dict | None = None) -> str:
 
 async def _json(path: str, params: dict | None = None):
     try:
-        r = await _api_request("GET", path, params=params)
+        r = await _request_get(path, params)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPStatusError as e:
@@ -1114,6 +1170,333 @@ async def data_quality(start: str = "", end: str = "", max_items: int = 100) -> 
     return json.dumps(check_quality(rows, max(1, min(max_items, MAX_LIST_ITEMS))), ensure_ascii=False)
 
 
+# ---------------------------------------------------------------- análisis climáticos avanzados ----
+
+RAIN_DAY_MM = 0.2  # umbral de "día de lluvia" (el mismo que usa _agg / year_records)
+COMPASS_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+
+def _month_stat(rows: list[dict], col: str, days: int, how: str, min_coverage: float) -> float | None:
+    """Estadístico mensual de una columna; None si hay menos de `min_coverage` de días con dato."""
+    vals = [v for r in rows if (v := _num(r.get(col))) is not None]
+    if len(vals) < max(1, math.ceil(min_coverage * days)):
+        return None
+    if how == "sum":
+        return sum(vals)
+    if how == "mean":
+        return statistics.fmean(vals)
+    if how == "max":
+        return max(vals)
+    if how == "min":
+        return min(vals)
+    if how == "rain_days":
+        return float(sum(1 for v in vals if v >= RAIN_DAY_MM))
+    raise ValueError(how)
+
+
+def compute_climatology(rows: list[dict], min_coverage: float = 0.8) -> dict:
+    """Normales climáticas por mes del calendario a partir de los meses COMPLETOS (>= min_coverage de días con dato,
+    respetando años bisiestos). Para cada mes: medias entre años, extremos absolutos y años récord."""
+    by_ym: dict[tuple[int, int], list[dict]] = {}
+    for r in rows:
+        by_ym.setdefault((r["_date"].year, r["_date"].month), []).append(r)
+
+    per_month: dict[int, list[dict]] = {m: [] for m in range(1, 13)}
+    for (y, m), rs in sorted(by_ym.items()):
+        days = calendar.monthrange(y, m)[1]
+        spec = {"temp_media": ("temp_media", "mean"), "temp_max_media": ("temp_max", "mean"),
+                "temp_min_media": ("temp_min", "mean"), "temp_max_abs": ("temp_max", "max"),
+                "temp_min_abs": ("temp_min", "min"), "lluvia_total": ("lluvia_total", "sum"),
+                "dias_lluvia": ("lluvia_total", "rain_days"), "horas_sol": ("horas_sol", "sum"),
+                "racha_max": ("racha_max", "max")}
+        rec: dict[str, Any] = {"anio": y}
+        for key, (col, how) in spec.items():
+            rec[key] = _month_stat(rs, col, days, how, min_coverage)
+        if any(v is not None for k, v in rec.items() if k != "anio"):
+            per_month[m].append(rec)
+
+    def avg(recs: list[dict], key: str) -> float | None:
+        vals = [r[key] for r in recs if r[key] is not None]
+        return round(statistics.fmean(vals), 2) if vals else None
+
+    def best(recs: list[dict], key: str, fn) -> dict | None:
+        cand = [r for r in recs if r[key] is not None]
+        if not cand:
+            return None
+        b = fn(cand, key=lambda r: r[key])
+        return {"anio": b["anio"], "valor": round(b[key], 2)}
+
+    out: dict[str, Any] = {}
+    for m, recs in per_month.items():
+        if not recs:
+            continue
+        out[f"{m:02d}"] = {
+            "n_anios": len(recs),
+            "temp_media": avg(recs, "temp_media"), "temp_max_media": avg(recs, "temp_max_media"),
+            "temp_min_media": avg(recs, "temp_min_media"),
+            "lluvia_total_media": avg(recs, "lluvia_total"), "dias_lluvia_media": avg(recs, "dias_lluvia"),
+            "horas_sol_media": avg(recs, "horas_sol"),
+            "temp_max_absoluta": best(recs, "temp_max_abs", max), "temp_min_absoluta": best(recs, "temp_min_abs", min),
+            "racha_max": best(recs, "racha_max", max),
+            "mes_mas_calido": best(recs, "temp_media", max), "mes_mas_frio": best(recs, "temp_media", min),
+            "mes_mas_lluvioso": best(recs, "lluvia_total", max), "mes_mas_seco": best(recs, "lluvia_total", min),
+        }
+    return out
+
+
+def compute_frost_dates(rows: list[dict], year: int, threshold: float, hemisphere: str = "north",
+                        today: datetime.date | None = None) -> dict:
+    """Última helada de primavera y primera de otoño de un año (helada = temp_min <= threshold).
+    Hemisferio norte: primavera = ene-jun, otoño = jul-dic. Hemisferio sur: primera y última helada del año natural."""
+    yr_rows = [r for r in rows if r["_date"].year == year]
+    valid = [(r["_date"], t) for r in yr_rows if (t := _num(r.get("temp_min"))) is not None]
+    frost = sorted(d for d, t in valid if t <= threshold)
+    if hemisphere == "north":
+        spring = [d for d in frost if d.month <= 6]
+        autumn = [d for d in frost if d.month >= 7]
+        last_spring = spring[-1] if spring else None
+        first_autumn = autumn[0] if autumn else None
+    else:
+        last_spring = frost[-1] if frost else None
+        first_autumn = frost[0] if frost else None
+    free = None
+    if hemisphere == "north" and last_spring and first_autumn:
+        free = (first_autumn - last_spring).days - 1
+    year_days = 366 if calendar.isleap(year) else 365
+    partial = len(valid) < 0.9 * year_days or (today is not None and year == today.year)
+    return {
+        "anio": year, "n_dias_con_dato": len(valid), "dias_helada": len(frost), "parcial": partial,
+        "ultima_helada_primavera": str(last_spring) if last_spring else None,
+        "primera_helada_otono": str(first_autumn) if first_autumn else None,
+        "periodo_sin_heladas_dias": free,
+    }
+
+
+def _mean_month_day(dates: list[str]) -> str | None:
+    """Fecha media (MM-DD) de una lista de fechas ISO, promediando el día del año."""
+    if not dates:
+        return None
+    doys = [datetime.date.fromisoformat(d).timetuple().tm_yday for d in dates]
+    ref = datetime.date(2001, 1, 1) + datetime.timedelta(days=round(statistics.fmean(doys)) - 1)
+    return ref.strftime("%m-%d")
+
+
+def compute_degree_days(rows: list[dict], base: float, upper: float | None = None,
+                        method: str = "average") -> list[tuple[datetime.date, float]]:
+    """Grados-día de crecimiento por día. 'average': max(0, (tmax+tmin)/2 - base).
+    'modified': antes de promediar, tmin se sube hasta `base` y tmax se limita a `upper` (método habitual en agronomía)."""
+    out: list[tuple[datetime.date, float]] = []
+    for r in sorted(rows, key=lambda x: x["_date"]):
+        tmin, tmax = _num(r.get("temp_min")), _num(r.get("temp_max"))
+        if tmin is None or tmax is None:
+            continue
+        if method == "modified":
+            tmax_c = max(min(tmax, upper) if upper is not None else tmax, base)
+            tmin_c = max(tmin, base)
+            dd = (tmax_c + tmin_c) / 2 - base
+        else:
+            dd = (tmax + tmin) / 2 - base
+        out.append((r["_date"], max(0.0, dd)))
+    return out
+
+
+def compass_sector(degrees: float) -> str:
+    return COMPASS_16[int((degrees % 360) / 22.5 + 0.5) % 16]
+
+
+def compute_wind_rose(rows: list[dict]) -> dict:
+    """Frecuencia por sector (16 rumbos) de la dirección dominante diaria y racha máxima por sector de la racha."""
+    dom: collections.Counter = collections.Counter()
+    gust_n: collections.Counter = collections.Counter()
+    gust_max: dict[str, float] = {}
+    for r in rows:
+        d = _num(r.get("dir_viento_dominante"))
+        if d is not None:
+            dom[compass_sector(d)] += 1
+        gd, gv = _num(r.get("dir_racha")), _num(r.get("racha_max"))
+        if gd is not None and gv is not None:
+            sec = compass_sector(gd)
+            gust_n[sec] += 1
+            gust_max[sec] = max(gust_max.get(sec, gv), gv)
+    total = sum(dom.values())
+    sectors = [{"sector": s, "dias": dom[s], "pct": round(100 * dom[s] / total, 1) if total else 0.0}
+               for s in COMPASS_16]
+    top = max(COMPASS_16, key=lambda s: dom[s]) if total else None
+    return {
+        "dias_con_direccion": total, "sector_mas_frecuente": top, "sectores": sectors,
+        "rachas_por_sector": [{"sector": s, "dias_con_racha_maxima_en_este_sector": gust_n[s],
+                               "racha_max": round(gust_max[s], 1)} for s in COMPASS_16 if gust_n[s]],
+    }
+
+
+def percentile_in_history(rows: list[dict], col: str, value: float, month: int, exclude: datetime.date,
+                          min_samples: int = 5) -> dict | None:
+    """Posición de `value` entre los valores del mismo mes del calendario en el resto del histórico."""
+    vals = [v for r in rows if r["_date"].month == month and r["_date"] != exclude
+            and (v := _num(r.get(col))) is not None]
+    if len(vals) < min_samples:
+        return None
+    return {"valor": value, "percentil": round(100 * sum(1 for v in vals if v < value) / len(vals)),
+            "posicion": 1 + sum(1 for v in vals if v > value), "de": len(vals) + 1}
+
+
+def _ongoing_run(rows: list[dict], col: str, op: str, value: float, last: datetime.date) -> int:
+    """Días consecutivos, hasta el último día con datos, que cumplen la condición (0 si no hay racha en curso)."""
+    for run in compute_streaks(rows, col, op, value, min_length=1):
+        if run["hasta"] == str(last):
+            return run["dias"]
+    return 0
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def climatology(start_year: int | None = None, end_year: int | None = None) -> str:
+    """Normales climáticas de la estación por mes del calendario (enero-diciembre), calculadas con los meses completos
+    del histórico (>= 80 % de días con dato): temperatura media/máx/mín, lluvia total y días de lluvia medios, horas de
+    sol, extremos absolutos y el año más cálido/frío/lluvioso/seco de cada mes. Sirve para preguntas como
+    '¿cuánto llueve normalmente en abril?' y como referencia de anomaly. start_year por defecto = CUMULUS_DATA_START_YEAR."""
+    lo = start_year if start_year is not None else DATA_START_YEAR
+    hi = end_year if end_year is not None else _today().year
+    if lo > hi:
+        raise ValueError("start_year no puede ser posterior a end_year")
+    rows = [r for r in await _all_dayfile() if lo <= r["_date"].year <= hi]
+    if not rows:
+        raise ValueError(f"No hay datos en el dayfile entre {lo} y {hi}")
+    out = {"periodo": {"start_year": lo, "end_year": hi}, "anios_con_datos": sorted({r["_date"].year for r in rows}),
+           "meses": compute_climatology(rows),
+           "nota": "Solo cuentan los meses con >= 80 % de días con dato; unidades de la estación."}
+    return json.dumps(out, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def frost_dates(threshold: float | None = None, start_year: int | None = None, end_year: int | None = None,
+                      hemisphere: Literal["north", "south"] = "north") -> str:
+    """Fechas de heladas por año: última helada de primavera, primera de otoño, días de helada y periodo sin heladas
+    (días entre ambas, hemisferio norte). Helada = temp_min <= threshold (por defecto CUMULUS_FROST_THRESHOLD, 0 °C).
+    Incluye fecha media (MM-DD) de las dos, calculada solo con años completos: útil para planificar siembras y
+    trasplantes. Los años incompletos se marcan 'parcial'. Hemisferio norte: primavera = ene-jun, otoño = jul-dic."""
+    thr = threshold if threshold is not None else FROST_THRESHOLD
+    lo = start_year if start_year is not None else DATA_START_YEAR
+    hi = end_year if end_year is not None else _today().year
+    if lo > hi:
+        raise ValueError("start_year no puede ser posterior a end_year")
+    rows = await _all_dayfile()
+    years = sorted({r["_date"].year for r in rows if lo <= r["_date"].year <= hi})
+    if not years:
+        raise ValueError(f"No hay datos en el dayfile entre {lo} y {hi}")
+    per_year = [compute_frost_dates(rows, y, thr, hemisphere, _today()) for y in years]
+    complete = [y for y in per_year if not y["parcial"]]
+    out = {
+        "umbral": thr, "hemisferio": hemisphere, "anios": per_year,
+        "fecha_media": {
+            "ultima_helada_primavera": _mean_month_day([y["ultima_helada_primavera"] for y in complete
+                                                        if y["ultima_helada_primavera"]]),
+            "primera_helada_otono": _mean_month_day([y["primera_helada_otono"] for y in complete
+                                                     if y["primera_helada_otono"]]),
+            "anios_completos": len(complete),
+        },
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def degree_days(start: str = "", end: str = "", base: float = 10.0, upper: float | None = None,
+                      method: Literal["average", "modified"] = "average") -> str:
+    """Grados-día de crecimiento (GDD) acumulados con temp_min/temp_max diarias, en las unidades de la estación.
+    base: temperatura base del cultivo (10 por defecto; 0, 5, 10... según cultivo). method='average': max(0, media - base);
+    'modified': tmin se sube a base y tmax se limita a `upper` antes de promediar (recomendado con upper, p. ej. 30).
+    Por defecto desde el 1 de enero del año actual hasta el último día con datos. Devuelve total, por mes y por año.
+    (CumulusMX ya trae grados-día de calefacción/refrigeración en las columnas grados_dia_calef / grados_dia_refr.)"""
+    if upper is not None and upper <= base:
+        raise ValueError("upper debe ser mayor que base")
+    s = start or f"{_today().year}-01-01"
+    rows = _select_rows(await _all_dayfile(), s, end)
+    series = compute_degree_days(rows, base, upper, method)
+    by_month: dict[str, float] = {}
+    by_year: dict[str, float] = {}
+    for d, v in series:
+        by_month[f"{d.year}-{d.month:02d}"] = by_month.get(f"{d.year}-{d.month:02d}", 0.0) + v
+        by_year[str(d.year)] = by_year.get(str(d.year), 0.0) + v
+    out = {
+        "base": base, "techo": upper, "metodo": method,
+        "periodo": {"desde": str(series[0][0]) if series else None, "hasta": str(series[-1][0]) if series else None},
+        "dias_evaluados": len(series), "total": round(sum(v for _, v in series), 1),
+        "por_mes": {k: round(v, 1) for k, v in by_month.items()},
+        "por_anio": {k: round(v, 1) for k, v in by_year.items()},
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def wind_rose(start: str = "", end: str = "") -> str:
+    """Rosa de los vientos del histórico diario (16 rumbos): cuántos días domina cada dirección (dir_viento_dominante) y la
+    racha máxima registrada con cada dirección de racha (dir_racha). start/end opcionales (yyyy-mm-dd; por defecto todo).
+    Un rumbo de 0 puede significar calma en CumulusMX: interprétalo con cautela."""
+    rows = _select_rows(await _all_dayfile(), start, end)
+    out = compute_wind_rose(rows)
+    out["periodo"] = {"desde": str(rows[0]["_date"]) if rows else None, "hasta": str(rows[-1]["_date"]) if rows else None}
+    return json.dumps(out, ensure_ascii=False)
+
+
+BRIEFING_TAGS = ["temp", "feelslike", "dew", "hum", "press", "presstrend", "wlatest", "wgust", "currentwdir", "rrate",
+                 "rfall", "SolarRad", "UV", "tempTH", "TtempTH", "tempTL", "TtempTL", "DataStopped", "time", "date",
+                 "tempunit", "pressunit", "windunit", "rainunit"]
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def daily_briefing() -> str:
+    """Resumen del día en una sola llamada: condiciones ahora y extremos de hoy; AYER en contexto (percentil de su Tmax,
+    Tmín y lluvia frente al mismo mes de otros años); mes en curso frente a lo normal (temperatura y lluvia acumulada);
+    y rachas en curso (días sin lluvia, con Tmax >= 30 y de helada). Combina datos en vivo con el histórico diario,
+    que llega hasta el último día cerrado ('datos_hasta')."""
+    tags_text, rows_or_err = await asyncio.gather(_get(_tags_path(BRIEFING_TAGS)), _all_dayfile(), return_exceptions=True)
+    out: dict[str, Any] = {"fecha_servidor": str(_today())}
+    try:
+        tags = json.loads(tags_text) if isinstance(tags_text, str) else {}
+    except ValueError:
+        tags = {}
+        out["aviso_ahora"] = str(tags_text)[:200]
+    out["ahora"] = {k: (n if (n := _num(v)) is not None else _clean(v)) if isinstance(v, str) else v
+                    for k, v in tags.items()}
+    if isinstance(rows_or_err, Exception) or not rows_or_err:
+        out["aviso_historico"] = f"Sin histórico disponible: {rows_or_err}" if isinstance(rows_or_err, Exception) \
+            else "El dayfile está vacío"
+        return json.dumps(out, ensure_ascii=False)
+
+    rows = rows_or_err
+    today = _today()
+    last = max(r["_date"] for r in rows)
+    out["datos_hasta"] = str(last)
+    if (today - last).days > 2:
+        out["aviso_historico"] = f"El histórico llega solo hasta {last}: puede estar desactualizado."
+
+    last_row = next(r for r in rows if r["_date"] == last)
+    context: dict[str, Any] = {}
+    for col in ("temp_max", "temp_min", "lluvia_total"):
+        v = _num(last_row.get(col))
+        context[col] = percentile_in_history(rows, col, v, last.month, last) if v is not None else None
+    out["ultimo_dia_cerrado_en_contexto"] = {"fecha": str(last), **context}
+
+    month_start = today.replace(day=1)
+    years = sorted({r["_date"].year for r in rows if r["_date"].year != today.year and r["_date"].year >= DATA_START_YEAR})
+    month: dict[str, Any] = {}
+    for col in ("temp_media", "lluvia_total"):
+        try:
+            a = compute_anomaly(rows, col, month_start, today, years)
+            month[col] = {k: a[k] for k in ("valor", "normal", "diferencia", "diferencia_pct", "percentil",
+                                            "posicion_entre_anios", "anios_comparados") if k in a}
+        except ValueError as e:
+            month[col] = {"aviso": str(e)}
+    out["mes_en_curso"] = month
+
+    stale = (today - last).days > 2
+    out["rachas_en_curso"] = None if stale else {
+        "dias_sin_lluvia": _ongoing_run(rows, "lluvia_total", "<", RAIN_DAY_MM, last),
+        "dias_con_tmax_ge_30": _ongoing_run(rows, "temp_max", ">=", WARM_THRESHOLDS[1], last),
+        "dias_de_helada": _ongoing_run(rows, "temp_min", "<=", FROST_THRESHOLD, last),
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def today_all(strip_html: bool = True) -> str:
     """Hoy vs ayer de TODAS las magnitudes (temp, hum, rain, wind, pressure, solar) en una sola llamada."""
@@ -1273,7 +1656,7 @@ ALL_ALARMS = (
 )
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def reloaddayfile() -> str:
     """Fuerza a CumulusMX a recargar dayfile.txt desde el disco e invalida la caché local en memoria."""
     if (err := _check_write_enabled()):
@@ -1286,7 +1669,7 @@ async def reloaddayfile() -> str:
     return f"Caché local de dayfile invalidada. CumulusMX: {res}"
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def clear_alarms(alarm: str = "all") -> str:
     """Restablece una alarma específica (p.ej. 'BatteryLow', 'AlarmSensor') o todas las alarmas en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1304,7 +1687,7 @@ async def clear_alarms(alarm: str = "all") -> str:
         return await _post("/api/utils/clearalarm.txt", content=alarm_id.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def clear_error_log() -> str:
     """Borra el registro de errores acumulado en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1312,7 +1695,7 @@ async def clear_error_log() -> str:
     return await _post("/api/utils/clearerrorlog.json")
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def trigger_ftp(
     dailygraphs: bool = False,
     noaa: bool = False,
@@ -1331,7 +1714,7 @@ async def trigger_ftp(
     return await _post("/api/utils/ftpnow.json", content=payload, headers={"Content-Type": "application/json"})
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def purgemysql() -> str:
     """Purga la cola de comandos pendientes/fallidos y la caché MySQL en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1341,7 +1724,7 @@ async def purgemysql() -> str:
 
 # ---------------------------------------------------------------- informes ----
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def generate_reports(
     report_type: Literal["year", "month"] = "month",
     year: int | None = None,
@@ -1366,7 +1749,7 @@ async def generate_reports(
         raise ValueError("report_type debe ser 'year' o 'month'")
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def upload_reports(
     report_type: Literal["year", "month"] = "month",
     year: int | None = None,
@@ -1401,7 +1784,7 @@ async def get_error_log() -> str:
 
 # ---------------------------------------------------------------- edición ----
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def edit_current_conditions(text: str) -> str:
     """Actualiza el texto descriptivo de las condiciones meteorológicas actuales de la estación."""
     if (err := _check_write_enabled()):
@@ -1413,7 +1796,7 @@ async def edit_current_conditions(text: str) -> str:
     )
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def edit_rain_today(raintoday: float, midnightrain: float | None = None) -> str:
     """Modifica los valores acumulados de lluvia de hoy y lluvia desde medianoche en la estación."""
     if (err := _check_write_enabled()):
@@ -1431,7 +1814,7 @@ async def edit_rain_today(raintoday: float, midnightrain: float | None = None) -
     return await _post("/api/edit/raintoday", data=data)
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def edit_diary(
     date: str,
     entry: str = "",
@@ -1461,7 +1844,7 @@ async def edit_diary(
     return await _post("/api/edit/diarydata", content=json.dumps(payload), headers={"Content-Type": "application/json"})
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def delete_diary(date: str) -> str:
     """Elimina la entrada del diario meteorológico para una fecha específica (yyyy-mm-dd)."""
     if (err := _check_write_enabled()):
@@ -1479,7 +1862,7 @@ async def get_station_settings() -> str:
     return await _get("/api/settings/stationdata.json")
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def update_station_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza la configuración de la estación meteorológica en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1508,7 +1891,7 @@ async def get_calibration_settings() -> str:
     return await _get("/api/settings/calibrationdata.json")
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def update_calibration_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza los factores y offsets de calibración de los sensores en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1540,7 +1923,7 @@ async def get_alarm_settings() -> str:
     return res
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def update_alarm_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza la configuración de alarmas y umbrales en CumulusMX."""
     if (err := _check_write_enabled()):
@@ -1577,7 +1960,7 @@ async def get_noaa_settings() -> str:
     return await _get("/api/settings/noaadata.json")
 
 
-@mcp.tool(annotations=WRITE_ACTION)
+@write_tool
 async def test_email(
     from_email: str,
     dest_email: str,
@@ -1676,6 +2059,41 @@ def resumen_anual_prompt(year: int) -> str:
     )
 
 
+@mcp.prompt("resumen_mensual")
+def resumen_mensual_prompt(year: int, month: int) -> str:
+    """Informe de un mes concreto frente a la climatología propia de la estación."""
+    return (
+        f"Elabora el informe climático de {year}-{month:02d}.\n"
+        f"1) Usa 'anomaly' (temp_media, temp_max, temp_min y lluvia_total) para comparar el mes con los mismos meses de otros años.\n"
+        f"2) Usa 'climate_summary' para los extremos del mes y 'find_streaks' para la racha seca y la de calor más largas.\n"
+        f"3) Usa 'count_days' para los días de lluvia (>= 0,2 mm) y de helada.\n"
+        f"Concluye si fue un mes cálido/frío y seco/húmedo respecto a lo normal, con cifras y percentiles."
+    )
+
+
+@mcp.prompt("heladas_y_cultivo")
+def heladas_y_cultivo_prompt(base_temp: float = 10.0) -> str:
+    """Ayuda a planificar siembras: fechas de heladas y grados-día acumulados."""
+    return (
+        f"Ayúdame a planificar el huerto con los datos de mi estación.\n"
+        f"Usa 'frost_dates' para decirme la fecha media de la última helada de primavera y de la primera de otoño, "
+        f"y cuánto varían de un año a otro (sé prudente: recomienda una fecha segura, no la media).\n"
+        f"Usa 'degree_days' con base {base_temp} desde el 1 de enero para ver cuántos grados-día llevamos este año "
+        f"frente a años anteriores, y qué implica para el desarrollo de los cultivos."
+    )
+
+
+@mcp.prompt("auditoria_datos")
+def auditoria_datos_prompt() -> str:
+    """Revisa si el histórico de la estación es fiable antes de analizarlo."""
+    return (
+        "Audita la calidad de los datos de la estación.\n"
+        "Usa 'data_quality' sobre todo el histórico y 'get_error_log' para ver errores recientes. "
+        "Lista los días faltantes (agrupa los consecutivos en rangos), los valores incoherentes y la humedad 0 % "
+        "(posible fallo del sensor), y dime qué conclusiones del histórico no deberían fiarse hasta corregirlo."
+    )
+
+
 def check_cumulus_connection() -> tuple[bool, str]:
     """Comprueba la conectividad con CumulusMX al arrancar e informa en el log."""
     auth = _get_auth()
@@ -1718,7 +2136,9 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("Iniciando cumulusmx-mcp v%s en http://0.0.0.0:%s", __version__, PORT)
     logger.info("URL backend CumulusMX: %s", BASE)
-    logger.info("Herramientas de escritura (ENABLE_WRITE_TOOLS): %s", is_write_enabled)
+    logger.info("Herramientas de escritura (ENABLE_WRITE_TOOLS): %s", "publicadas" if WRITE_TOOLS_ENABLED
+                else "ocultas (modo solo lectura)")
+    logger.info("Timeout/reintentos hacia CumulusMX: %ss / %d", CUMULUS_TIMEOUT, CUMULUS_RETRIES)
     logger.info("Basic Auth hacia CumulusMX: %s", f"configurada (usuario: {user})" if user else "desactivada")
     logger.info("Bearer Auth para clientes MCP: %s", "activada" if TOKEN else "desactivada")
     logger.info("Prefijo strip (MCP_STRIP_PREFIX): %s", STRIP_PREFIX or "(ninguno)")

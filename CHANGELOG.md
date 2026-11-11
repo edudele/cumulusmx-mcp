@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.5.0]
+
+### Added
+- `climatology`: monthly normals (temperatures, rain, rain days, sun hours, extremes, record years) from complete months.
+- `frost_dates`: last spring frost, first autumn frost, frost days and frost-free period per year, plus average dates
+  (complete years only); northern and southern hemisphere modes.
+- `degree_days`: growing degree days with base/upper temperature and `average` / `modified` methods, by month and year.
+- `wind_rose`: 16-sector frequency of the dominant daily wind direction and peak gust per gust direction.
+- `daily_briefing`: live conditions, yesterday in context (percentile/rank vs the same month in other years), month-to-date
+  anomaly of temperature and rain, and streaks in progress, in one call. Degrades gracefully if live data or history fails.
+- MCP server `instructions` sent to clients (tool selection, conventions, write-tool etiquette) and three guided prompts:
+  `resumen_mensual`, `heladas_y_cultivo`, `auditoria_datos`.
+- `CUMULUS_TIMEOUT` (default 30 s) and `CUMULUS_RETRIES` (default 2).
+
+### Changed
+- GET requests to CumulusMX are retried with exponential backoff (0.3 s, 0.6 s) on connection errors, timeouts and
+  HTTP 502/504. 4xx, 503 ("station not running") and all POST requests are never retried.
+- `ENABLE_WRITE_TOOLS=false` now removes the 15 write tools from the published tool list instead of only making them
+  refuse to run (the runtime guard stays as a second layer). Tool count: 58 (43 read-only, 15 write).
+
 ## [1.4.0]
 
 Verified against the official Cumulus MX Local API wiki, the CumulusMX 5.2.0 source and a live 5.2.0 station.

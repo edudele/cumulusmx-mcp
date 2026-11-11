@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.4.0"
+  version: "1.5.0"
   server: cumulusmx-mcp
 ---
 
@@ -21,6 +21,7 @@ Never invent weather values. Every number you report must come from a tool resul
 | The user asks about | Use |
 |---|---|
 | "What is it like right now?" | `snapshot` (compact) or `current_data` (everything) |
+| A full daily overview in one call | `daily_briefing` (now, yesterday in context, month vs normal, streaks in progress) |
 | Today vs yesterday | `today_all` (all variables) or `today_yesterday` (one variable) |
 | Hottest / coldest / wettest / windiest days ever | `rankings` |
 | A year's extremes, frost days, warm days | `year_records` |
@@ -30,6 +31,10 @@ Never invent weather values. Every number you report must come from a tool resul
 | Longest dry spell, heatwave, frost run | `find_streaks` |
 | "Was this month warmer/wetter than normal?" | `anomaly` (compares with the station's own other years) |
 | Can I trust the history? Gaps, sensor faults | `data_quality` |
+| "What is normal for April?" Monthly normals and record years | `climatology` |
+| Last spring frost / first autumn frost, frost-free period (planting dates) | `frost_dates` |
+| Growing degree days for a crop (base 10 etc.) | `degree_days` |
+| Prevailing wind directions, rose of the winds | `wind_rose` |
 | This period vs that period | `compare_periods` |
 | Raw daily rows or specific columns | `dayfile_range` (use `summary_only=true` first) |
 | All-time / this-month / this-year records | `records_all` (or `records` for one category) |
@@ -73,8 +78,8 @@ Read it before calling `dayfile_range`, `rankings`, `graph_summary` or any write
 ## Write tools: ask first
 
 The server also has 15 tools that change the station or its files. They are marked
-destructive and can be switched off with `ENABLE_WRITE_TOOLS=false`
-(if so they reply that writes are disabled; do not try to work around it).
+destructive. When the server runs with `ENABLE_WRITE_TOOLS=false` they are not published at all
+(and would reply that writes are disabled if called; do not try to work around it).
 
 - `reloaddayfile`, `clear_alarms`, `clear_error_log`, `purgemysql`, `trigger_ftp`,
   `generate_reports`, `upload_reports`, `test_email`
