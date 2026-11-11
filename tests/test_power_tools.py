@@ -362,7 +362,8 @@ def run_isolated(code: str, **env) -> str:
 LIST_CODE = (
     "import asyncio, json, server\n"
     "t = asyncio.run(server.mcp.list_tools())\n"
-    "ro = [x.name for x in t if x.annotations and x.annotations.read_only_hint]\n"
+    "from tests.compat import is_read_only\n"
+    "ro = [x.name for x in t if is_read_only(x)]\n"
     "print(json.dumps({'total': len(t), 'ro': len(ro), 'names': sorted(x.name for x in t)}))"
 )
 
@@ -370,12 +371,13 @@ LIST_CODE = (
 class TestReadOnlyMode:
     def test_default_publishes_all_tools(self):
         info = json.loads(run_isolated(LIST_CODE))
-        assert info["total"] == 83 and info["ro"] == 55
+        assert info["total"] >= 83 and info["ro"] >= 55 and info["total"] > info["ro"]
 
     @pytest.mark.parametrize("value", ["false", "0", "no", "off", "FALSE"])
     def test_write_tools_are_not_published_when_disabled(self, value):
+        default = json.loads(run_isolated(LIST_CODE))
         info = json.loads(run_isolated(LIST_CODE, ENABLE_WRITE_TOOLS=value))
-        assert info["total"] == 55 and info["ro"] == 55
+        assert info["total"] == info["ro"] == default["ro"]            # solo quedan las de lectura, todas
         for name in ("edit_rain_today", "update_station_settings", "clear_alarms", "trigger_ftp", "test_email",
                      "delete_diary", "upload_reports"):
             assert name not in info["names"], name

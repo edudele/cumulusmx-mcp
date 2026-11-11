@@ -197,8 +197,8 @@ def _agg(rows: list[dict]) -> dict:
         v = fn(vals, key=lambda x: x[0])
         return {"valor": v[0], "fecha": str(v[1])}
 
-    lluvia = [utils._num(r["lluvia_total"]) or 0 for r in rows]
-    medias = [utils._num(r["temp_media"]) for r in rows if utils._num(r["temp_media"]) is not None]
+    lluvia = [utils._num(r.get("lluvia_total")) or 0 for r in rows]
+    medias = [utils._num(r.get("temp_media")) for r in rows if utils._num(r.get("temp_media")) is not None]
     return {
         "dias": len(rows),
         "desde": str(rows[0]["_date"]), "hasta": str(rows[-1]["_date"]),
@@ -207,7 +207,7 @@ def _agg(rows: list[dict]) -> dict:
         "lluvia_total": round(sum(lluvia), 1), "dias_con_lluvia(>=0.2)": sum(1 for x in lluvia if x >= 0.2),
         "dia_mas_lluvioso": ext("lluvia_total", max),
         "racha_max": ext("racha_max", max), "pres_max": ext("pres_max", max), "pres_min": ext("pres_min", min),
-        "horas_sol_total": round(sum(utils._num(r["horas_sol"]) or 0 for r in rows), 1),
+        "horas_sol_total": round(sum(utils._num(r.get("horas_sol")) or 0 for r in rows), 1),
         "uv_max": ext("uv_max", max), "solar_max": ext("solar_max", max),
         "unidades": "las de la estación (ver station_info units)",
     }

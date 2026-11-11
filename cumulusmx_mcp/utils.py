@@ -69,3 +69,18 @@ def _num(x: Any) -> float | None:
 
 def _today() -> datetime.date:
     return datetime.date.today()
+
+
+# Claves cuyo valor es un secreto (contraseñas, tokens, claves de API...). Se enmascaran en auditoría, diffs y copias de
+# vista previa, y en las lecturas de ajustes con CUMULUS_MASK_SECRETS o con un token de solo lectura.
+SECRET_KEY_RE = re.compile(r"(pass(word)?|pwd|secret|token|api[-_]?key|psk)$", re.IGNORECASE)
+
+
+def _mask_secrets_in(obj: Any) -> Any:
+    """Copia de `obj` con los valores de texto no vacíos de claves secretas sustituidos por '***'."""
+    if isinstance(obj, dict):
+        return {k: ("***" if isinstance(v, str) and v and SECRET_KEY_RE.search(str(k)) else _mask_secrets_in(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_mask_secrets_in(v) for v in obj]
+    return obj

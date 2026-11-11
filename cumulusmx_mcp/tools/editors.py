@@ -5,11 +5,12 @@ import urllib.parse
 from typing import Any, Literal
 
 
-from .. import client
+from .. import backups, client
 from .. import dayrows
 from .. import safety
 from .. import settings_engine
 from ..app import write_tool
+from ..config import logger
 
 
 def _editor_payload(action: str, lines: list[int] | None = None, data: list[list[str]] | None = None, **extra: Any) -> str:
@@ -24,19 +25,43 @@ def _editor_payload(action: str, lines: list[int] | None = None, data: list[list
     return json.dumps(body, ensure_ascii=False)
 
 
+async def _backup_dayfile_line(line: int) -> str | None:
+    """Guarda la línea actual del dayfile antes de editarla/borrarla. None si las copias están desactivadas o falla."""
+    if not backups.enabled():
+        return None
+    try:
+        data = await client._json("/api/data/dayfile", {"draw": 1, "start": line - 1, "length": 1, "search[value]": ""})
+        row = data["data"][0]
+        if int(row[0]) != line:
+            raise ValueError(f"CumulusMX devolvió la línea {row[0]} en lugar de la {line}")
+    except Exception as exc:
+        logger.warning("No se pudo leer la línea %s del dayfile para la copia previa: %s", line, exc)
+        return None
+    return backups.save("dayfile", f"linea{line}", {"line": line, "row": row}, "edit_dayfile")
+
+
+async def _edit_dayfile(action: str, line: int, values: list[str]) -> str:
+    """Implementación de edit_dayfile (también la usa restore_backup). Devuelve un sobre JSON con la respuesta y la copia."""
+    if line < 1 or not values:
+        raise ValueError("line debe ser >= 1 y values no puede estar vacío")
+    payload = _editor_payload(action, [line], [[str(v) for v in values]])
+    backup_id = await _backup_dayfile_line(line)
+    response = await client._post("/api/edit/dayfile", content=payload, headers=settings_engine.JSON_HEADERS)
+    dayrows.invalidate_cache()
+    result: dict[str, Any] = {"respuesta": response, "copia_id": backup_id}
+    if backups.enabled() and backup_id is None:
+        result["aviso"] = "No se pudo guardar la copia previa de la línea (ver el log del servidor)."
+    return json.dumps(result, ensure_ascii=False)
+
+
 @write_tool
 async def edit_dayfile(action: Literal["Edit", "Delete"], line: int, values: list[str]) -> str:
     """Edita o borra UNA línea del dayfile.txt (corrección de datos históricos). line: número de línea (1 = primera; es el
     primer valor que devuelve la tool dayfile). values: los campos de esa línea tal como aparecen en dayfile.txt (fecha
     dd/MM/yy primero, sin el número de línea). CumulusMX comprueba que la fecha coincide con la de la línea indicada.
-    Actualiza también SQLite y, si está activado 'update on edit', MySQL. HAZ COPIA DE SEGURIDAD antes de editar."""
-    if line < 1 or not values:
-        raise ValueError("line debe ser >= 1 y values no puede estar vacío")
-    if (err := safety._check_write_enabled()):
-        return err
-    dayrows.invalidate_cache()
-    return await client._post("/api/edit/dayfile", content=_editor_payload(action, [line], [[str(v) for v in values]]),
-                       headers=settings_engine.JSON_HEADERS)
+    Actualiza también SQLite y, si está activado 'update on edit', MySQL. Guarda antes una copia de la línea original
+    (copia_id en la respuesta; se puede deshacer con restore_backup)."""
+    return await _edit_dayfile(action, line, values)
 
 
 @write_tool
@@ -100,7 +125,7 @@ RECORD_EDIT_FIELDS: dict[str, tuple[str, ...]] = {
 async def _station_decimal_separator() -> str:
     """Separador decimal que usa la estación (CumulusMX parsea los valores editados con su cultura regional)."""
     text = await client._get("/api/tags/process.json?temp")
-    m = re.search(r'"temp":"-?\d+([.,])\d', text)
+    m = re.search(r'"temp"\s*:\s*"\s*-?\d+([.,])\d', text)
     return m.group(1) if m else "."
 
 
@@ -125,7 +150,16 @@ async def edit_records(scope: Literal["alltime", "monthly", "thismonth", "thisye
     sep = await _station_decimal_separator()
     name = f"{month}-{field}" if scope == "monthly" else field
     body = f"name={name}&value={str(value).replace('.', sep)}&time={urllib.parse.quote_plus(time)}"
-    return await client._post(f"/api/edit/{scope}", content=body, headers=settings_engine.FORM_HEADERS)
+    backup_id = None
+    if backups.enabled():  # los récords se guardan como texto de la pantalla de edición (restauración manual)
+        before = await client._get(f"/api/edit/{scope}records.json")
+        if not before.startswith("ERROR"):
+            backup_id = backups.save("records", scope, before, "edit_records")
+    response = await client._post(f"/api/edit/{scope}", content=body, headers=settings_engine.FORM_HEADERS)
+    result: dict[str, Any] = {"respuesta": response, "copia_id": backup_id}
+    if backups.enabled() and backup_id is None:
+        result["aviso"] = "No se pudo guardar la copia previa de los récords (ver el log del servidor)."
+    return json.dumps(result, ensure_ascii=False)
 
 
 STATION_INPUT_PROTOCOLS: dict[str, tuple[str, ...]] = {

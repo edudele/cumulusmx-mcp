@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  pytest:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,10 +19,72 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install "fastmcp>=3,<5" httpx websockets tzdata pytest pytest-asyncio
+      - name: Ruff
+        run: pip install ruff && ruff check .
+
+  tests:
+    name: tests (py${{ matrix.python }}, fastmcp ${{ matrix.fastmcp }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { python: "3.10", fastmcp: "4.*" }
+          - { python: "3.12", fastmcp: "3.*" }
+          - { python: "3.12", fastmcp: "4.*" }
+          - { python: "3.13", fastmcp: "4.*" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: pip install "fastmcp==${{ matrix.fastmcp }}" ".[dev]"
 
       - name: Run tests
         env:
           MCP_AUTH_TOKEN: ci-test-token
         run: python -m pytest -q
+
+  docker-smoke:
+    name: docker image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t cumulusmx-mcp:ci .
+
+      - name: Run and check
+        run: |
+          docker run -d --name mcp -p 8000:8000 \
+            -e MCP_AUTH_TOKEN=ci-token -e MCP_AUTH_TOKEN_READONLY=ci-readonly \
+            -e CUMULUSMX_URL=http://127.0.0.1:9 cumulusmx-mcp:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/health && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8000/health | grep -q '"status":"healthy"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/mcp)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer wrong' http://127.0.0.1:8000/mcp)" = "401"
+          docker exec mcp cumulusmx-mcp --version
+          docker exec mcp sh -c 'touch /data/.write-test && rm /data/.write-test'
+          docker logs mcp 2>&1 | tail -20
+
+  dependency-audit:
+    name: dependency audit (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: pip-audit
+        run: pip install pip-audit && pip-audit -r requirements.txt

@@ -1,13 +1,11 @@
 """Motor genérico de ajustes: lectura-fusión-escritura con vista previa, enmascarado de secretos y formato de cuerpo."""
 import json
-import re
 import urllib.parse
 from typing import Any, Literal
 
 
-from . import client
+from . import backups, client, safety
 from . import config
-from . import safety
 from . import utils
 
 
@@ -49,23 +47,13 @@ SettingsSection = Literal[
 ]
 
 
-SECRET_KEY_RE = re.compile(r"(pass(word)?|pwd|secret|token|api[-_]?key|psk)$", re.IGNORECASE)
-
-
-def _mask_secrets_in(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        return {k: ("***" if isinstance(v, str) and v and SECRET_KEY_RE.search(str(k)) else _mask_secrets_in(v))
-                for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_mask_secrets_in(v) for v in obj]
-    return obj
 
 
 def _maybe_mask(text: str) -> str:
-    if not config.CUMULUS_MASK_SECRETS:
+    if not (config.CUMULUS_MASK_SECRETS or safety.current_scope() == "readonly"):
         return text
     try:
-        return json.dumps(_mask_secrets_in(json.loads(text)), ensure_ascii=False)
+        return json.dumps(utils._mask_secrets_in(json.loads(text)), ensure_ascii=False)
     except ValueError:
         return text
 
@@ -90,7 +78,7 @@ def _diff_paths(old: Any, new: Any, prefix: str = "") -> dict[str, dict]:
 def _mask_secrets_in_diff(diff: dict[str, dict]) -> dict[str, dict]:
     masked = {}
     for path, change in diff.items():
-        if SECRET_KEY_RE.search(path.rsplit(".", 1)[-1]):
+        if utils.SECRET_KEY_RE.search(path.rsplit(".", 1)[-1]):
             change = {k: ("***" if isinstance(v, str) and v else v) for k, v in change.items()}
         masked[path] = change
     return masked
@@ -131,8 +119,19 @@ async def _settings_update(section: str, settings: dict[str, Any] | str, dry_run
         result["aplicado"] = False
         result["nota"] = "Sin cambios: la configuración ya tiene esos valores."
         return json.dumps(result, ensure_ascii=False)
+    backup_id = backups.save("settings", section, current, "update_settings")
+    result["copia_id"] = backup_id
+    if backups.enabled() and backup_id is None:
+        result["aviso"] = "No se pudo guardar la copia previa de seguridad (ver el log del servidor)."
     headers = JSON_HEADERS if style == "raw" else FORM_HEADERS
     response = await client._post(f"/api/setsettings/{post_path}", content=_encode_settings_body(style, merged), headers=headers)
     result["aplicado"] = True
     result["respuesta"] = response
     return json.dumps(result, ensure_ascii=False)
+
+
+async def legacy_update(section: str, settings: dict[str, Any] | str) -> str:
+    """Para los actualizadores clásicos (estación, calibración, alarmas): mismo motor seguro, pero devuelve el texto de
+    respuesta de CumulusMX tal cual, como siempre. Si no puede leer la configuración actual lanza ValueError (no escribe)."""
+    out = json.loads(await _settings_update(section, settings))
+    return out["respuesta"] if out.get("aplicado") else out.get("nota", "")

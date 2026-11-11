@@ -17,6 +17,9 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Historical data & Analytics** — daily summaries from dayfile across all years, flexible column alias filtering (`date`, `mintemp`, `rain`, etc.) and aggregated statistical summaries (`summary_only`).
 - **Agronomy & climate tools** — `climatology` (monthly normals), `frost_dates` (last spring / first autumn frost, frost-free period), `degree_days` (growing degree days), `wind_rose` (16-point rose) and `daily_briefing` (live conditions + yesterday in context + month vs normal + streaks in progress).
 - **Full CumulusMX API coverage** — read *and* write: every settings section (`get_settings` / `update_settings` with merge, `dry_run` preview and no blind writes), dedicated **MySQL** and **MQTT** tools (`get_/update_mysql_settings`, `mysql_table`, `get_/update_mqtt_settings`, `mysql_cache`), history corrections (`edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_records`), diary import/export, `interval_data` / `daily_data`, `records_query`, custom charts, WebSocket `live_sample` and HTTP station input. See [API coverage](#api-coverage).
+- **Safety net for the write tools** — every write is **audited** (log + optional JSON-Lines file, secrets masked), the previous state is **backed up automatically** and can be undone with `restore_backup`, and an optional **read-only token** lets others query the station without being able to change anything. See [Security model](#security-model).
+- **Alerts and reports** — `weather_alerts` (frost, wind, rain, heat, UV, pressure drop...) and `period_report` (a shareable Markdown weekly / monthly / yearly report compared with the station's own normals).
+- **Runs anywhere** — Docker, `pip`/`uvx`, or **stdio** for local clients such as Claude Desktop. Pinned dependencies, tested on FastMCP 3.x and 4.x and Python 3.10 - 3.13.
 - **Resilient** — GET requests to CumulusMX are retried with backoff on transient failures; timeouts are configurable.
 - **Agent-ready** — the server sends usage instructions to MCP clients (which tool for which question, units, decimal conventions, write-tool etiquette).
 - **Climate analytics** — `count_days`, `find_streaks`, `anomaly` and `data_quality` answer "how many days above 35 °C?", "longest dry spell?", "was this July warmer than normal?" and "can I trust the history?" from the station's own data, with no extra CumulusMX endpoints.
@@ -46,6 +49,30 @@ docker run -d \
   -p 8000:8000 \
   edudele/cumulusmx-mcp
 ```
+
+### Python package (pip / uvx) and stdio
+
+```bash
+pip install git+https://github.com/edudele/cumulusmx-mcp      # or: uvx --from git+https://github.com/edudele/cumulusmx-mcp cumulusmx-mcp
+CUMULUSMX_URL=http://your-cumulusmx-host:8998 MCP_AUTH_TOKEN=secret cumulusmx-mcp           # HTTP on :8000
+cumulusmx-mcp --transport stdio                                                          # local MCP client (no HTTP, no token)
+```
+
+Claude Desktop (or any stdio client):
+
+```json
+{
+  "mcpServers": {
+    "cumulusmx": {
+      "command": "cumulusmx-mcp",
+      "args": ["--transport", "stdio"],
+      "env": { "CUMULUSMX_URL": "http://192.168.1.10:8998" }
+    }
+  }
+}
+```
+
+In stdio mode the process is started by your client and nobody else can reach it, so there is no Bearer token.
 
 ### Docker Compose
 
@@ -83,16 +110,37 @@ See [`.env.example`](.env.example) for all variables.
 | `CUMULUS_CACHE_TTL` | | `600` | In-memory cache TTL in seconds for current year dayfile data |
 | `CUMULUS_TIMEZONE` | | — | IANA time zone of the station (e.g. `Europe/Madrid`). Needed only to give readable dates (`2025-01-31 14:00`) to `interval_data` / `daily_data`; Unix seconds always work |
 | `CUMULUS_MASK_SECRETS` | | `false` | `true` masks passwords and keys (`pass`, `password`, `phpsecret`, API keys...) in `get_settings`, `get_mysql_settings` and `get_mqtt_settings`. Off by default: the server returns the configuration as CumulusMX does |
+| `MCP_AUTH_TOKEN_READONLY` | | — | Second Bearer token that can **query but not write**: write tools refuse to run with it and settings are returned with passwords masked |
+| `CUMULUS_BACKUP_DIR` | | system temp dir | Where the pre-write backups are kept (`none` disables them). Mount a volume (the image uses `/data/backups`) to keep them across restarts |
+| `CUMULUS_BACKUP_KEEP` | | `200` | Maximum number of backups kept (the oldest are deleted) |
+| `CUMULUS_AUDIT_FILE` | | — | Also append every write (JSON Lines) to this file; the audit trail always goes to the log (logger `cumulusmx-mcp.audit`). The image uses `/data/audit.jsonl` |
 | `CUMULUS_TIMEOUT` | | `30` | Timeout in seconds for each request to CumulusMX |
 | `CUMULUS_RETRIES` | | `2` | Retries (exponential backoff) of GET requests on connection errors, timeouts and HTTP 502/504. POST requests are never retried |
 | `CUMULUS_USER` | | — | HTTP Basic Auth username for CumulusMX API (optional) |
 | `CUMULUS_PASSWORD` | | — | HTTP Basic Auth password for CumulusMX API (optional) |
-| `ENABLE_WRITE_TOOLS` | | `true` | Publish the 15 tools that modify data or station state. With `false` they are not even listed to the client (read-only server) |
+| `ENABLE_WRITE_TOOLS` | | `true` | Publish the 29 tools that modify data or station state. With `false` they are not even listed to the client (read-only server) |
 | `LOG_LEVEL` | | `info` | Log verbosity: `info`, `debug`, `warning`, `error` |
 
 > **Security tip:** write tools are enabled by default. If you only need to query your station, set
-> `ENABLE_WRITE_TOOLS=false`: the 28 write tools are then **not published at all** (clients only see the 55 read-only
+> `ENABLE_WRITE_TOOLS=false`: the 29 write tools are then **not published at all** (clients only see the 60 read-only
 > tools), and they would refuse to run even if called directly.
+
+---
+
+## Security model
+
+| Layer | What it does |
+|---|---|
+| **Bearer token** (`MCP_AUTH_TOKEN`) | Required on every request except `/health`. Full access. |
+| **Read-only token** (`MCP_AUTH_TOKEN_READONLY`) | Optional second token. It can use every read tool, but write tools answer *"este token es de solo lectura"* and settings come back with passwords masked. The client still *lists* the write tools; it just cannot run them. |
+| **`ENABLE_WRITE_TOOLS=false`** | The 29 write tools are not published at all. |
+| **Audit** | Each write is recorded (tool, token scope, arguments with secrets masked, result `ok` / `fallo` / `denegado` / `error`) in the log and, with `CUMULUS_AUDIT_FILE`, in a JSON-Lines file. `get_audit_log` shows the recent ones. |
+| **Backups and undo** | Before changing a settings section, a day-file line or the records, the previous state is saved (`CUMULUS_BACKUP_DIR`, files `0600`). `list_backups` / `get_backup` / `restore_backup` undo it, and a restore is itself undoable. |
+| **No blind writes** | Settings updates read the current section first and refuse to write if they cannot (the old classic updaters used to overwrite with only the fragment). `dry_run=true` previews the diff. |
+| **Secrets** | Passwords are returned by the settings tools unless `CUMULUS_MASK_SECRETS=true` or the read-only token is used. They never appear in the audit log. Backups can contain them, hence the `0600` permissions. |
+| **No outbound calls** | The server only talks to CumulusMX. FastMCP's update check against PyPI is disabled by default. |
+
+Keep the server behind HTTPS (a reverse proxy) when it is reachable from outside your network.
 
 ---
 
@@ -101,7 +149,7 @@ See [`.env.example`](.env.example) for all variables.
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.6.0"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.7.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -208,6 +256,16 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 | Tool | Description |
 |---|---|
 | `get_error_log` | Retrieve system warning and error log entries |
+
+### Alerts, reports and safety net
+
+| Tool | Description |
+|---|---|
+| `weather_alerts` | Active alerts right now: frost (today / in progress / night risk), strong wind, intense rain, heat, high UV, fast pressure drop, very dry hot air, station without data. Thresholds can be overridden |
+| `period_report` | Shareable Markdown report for a week, month or year: temperatures, rain and streaks, wind, pressure, sun and a comparison with the station's own normals |
+| `list_backups` / `get_backup` | Backups taken before each write (settings, day-file lines, records) |
+| `restore_backup` | Undo a settings change or a day-file edit from its backup (`dry_run=true` by default; the restore is undoable too) |
+| `get_audit_log` | Recent writes done through this server |
 
 ### Configuration, MySQL & MQTT
 
@@ -339,35 +397,52 @@ Other agents that support `SKILL.md` folders can load it from the same directory
 
 ---
 
+## Development
+
+```bash
+git clone https://github.com/edudele/cumulusmx-mcp.git && cd cumulusmx-mcp
+pip install -e ".[dev]"
+python -m pytest -q            # ~370 tests, a few seconds; no CumulusMX needed (a simulator is included)
+ruff check .
+```
+
+The code lives in the `cumulusmx_mcp/` package, split by responsibility (config, HTTP client, day-file analytics,
+settings engine, one module of tools per domain...). `server.py` is only a compatibility shim.
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** explains the layers, the rules the tests enforce and how to add a tool;
+[CONTRIBUTING.md](CONTRIBUTING.md) has the checklist. To smoke-test a deployed server (read-only calls only):
+
+```bash
+python scripts/smoke_readonly.py https://your-domain/mcp-res/mcp YOUR_TOKEN
+```
+
+---
+
 ## Versioning and releases
 
 The project follows [Semantic Versioning](https://semver.org/) and keeps a [CHANGELOG](CHANGELOG.md).
-The current version is defined once in `server.py` (`__version__`) and is reported by `GET /health`,
-the `server_status` tool and the startup log.
+The version is defined once, in `cumulusmx_mcp/__init__.py` (`__version__`), and is reported by `GET /health`,
+the `server_status` tool, `cumulusmx-mcp --version` and the startup log.
 
 To cut a release:
 
-1. Update `__version__` in `server.py` and add a `## [X.Y.Z]` section at the top of `CHANGELOG.md`
-   (`tests/test_versioning.py` fails if they differ). Also update `metadata.version` in the skill's `SKILL.md`.
+1. Update `__version__` and add a `## [X.Y.Z]` section at the top of `CHANGELOG.md`; also update `metadata.version` in the
+   skill's `SKILL.md` (`tests/test_versioning.py` fails if they differ).
 2. Merge to `main` (publishes the `latest` Docker image).
-3. Tag the release: `git tag vX.Y.Z && git push origin vX.Y.Z`. The workflow checks that the tag matches
-   `__version__` and publishes `X.Y.Z`, `X.Y`, `X` and `latest` images to Docker Hub.
+3. Run the **Release** workflow (Actions -> Release -> Run workflow, version `X.Y.Z`), or push the tag yourself
+   (`git tag vX.Y.Z && git push origin vX.Y.Z`). It validates the version, creates the tag and the GitHub release with the
+   CHANGELOG notes, and publishes the `X.Y.Z`, `X.Y`, `X` and `latest` images to Docker Hub.
 
-Tests run on every pull request and on pushes to any branch except `main` (`.github/workflows/tests.yml`):
-
-```bash
-pip install "fastmcp>=3,<5" httpx websockets tzdata pytest pytest-asyncio
-MCP_AUTH_TOKEN=test python -m pytest -q
-```
+CI (`.github/workflows/tests.yml`) runs on every pull request and on pushes to any branch except `main`: lint, the test
+suite on Python 3.10 / 3.12 / 3.13 with FastMCP 3.x and 4.x, a smoke test of the built Docker image and an informational
+dependency audit. Dependencies are pinned in `requirements.txt` and kept up to date by Dependabot.
 
 ---
 
 ## Building locally
 
 ```bash
-git clone https://github.com/edudele/cumulusmx-mcp.git
-cd cumulusmx-mcp
 docker build -t cumulusmx-mcp .
+docker run -d -p 8000:8000 -e MCP_AUTH_TOKEN=secret -e CUMULUSMX_URL=http://cumulusmx:8998 -v cumulus-mcp:/data cumulusmx-mcp
 ```
 
 ---

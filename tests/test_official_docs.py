@@ -188,7 +188,7 @@ class TestTieDatesCap:
         assert ext["fechas"] == ["2024-01-10", "2024-03-05"] and "n_fechas" not in ext
 
     def test_summary_payload_stays_small_with_hundreds_of_ties(self):
-        rows = [{"fecha": f"2024-01-01", "lluvia_rate_max": 0.0, "_date": datetime.date(2024, 1, 1)}] * 600
+        rows = [{"fecha": "2024-01-01", "lluvia_rate_max": 0.0, "_date": datetime.date(2024, 1, 1)}] * 600
         out = json.dumps(server.summarize(rows, ["fecha", "lluvia_rate_max"]))
         assert len(out) < 1200
 

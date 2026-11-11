@@ -7,3 +7,7 @@ __pycache__/
 PLAN*.md
 *.plan.md
 .pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cumulusmx-mcp"
+dynamic = ["version"]
+description = "MCP server for CumulusMX weather stations: queries, climate analytics, configuration (MySQL, MQTT...), history corrections and live data."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "edudele" }]
+keywords = ["mcp", "model-context-protocol", "cumulusmx", "weather", "weather-station", "fastmcp"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+dependencies = [
+    "fastmcp>=3,<5",
+    "httpx>=0.27",
+    "uvicorn>=0.30",
+    "websockets>=12",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "pyyaml>=6", "tomli>=2; python_version < '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/edudele/cumulusmx-mcp"
+Issues = "https://github.com/edudele/cumulusmx-mcp/issues"
+Changelog = "https://github.com/edudele/cumulusmx-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+cumulusmx-mcp = "cumulusmx_mcp.cli:main"
+
+[tool.setuptools]
+packages = ["cumulusmx_mcp", "cumulusmx_mcp.tools"]
+py-modules = ["server"]
+
+[tool.setuptools.dynamic]
+version = { attr = "cumulusmx_mcp.__version__" }
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+extend-exclude = ["tests/verify.py"]
+
+[tool.ruff.lint]
+# Errores reales (sintaxis, nombres sin definir, imports sobrantes, comparaciones erróneas...). Sin reglas de estilo.
+select = ["E4", "E7", "E9", "F"]

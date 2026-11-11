@@ -11,12 +11,19 @@ services:
     restart: unless-stopped
     environment:
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?define MCP_AUTH_TOKEN en .env}
+      # Opcional: token que solo permite consultar (no ejecuta tools de escritura y enmascara contraseñas)
+      MCP_AUTH_TOKEN_READONLY: ${MCP_AUTH_TOKEN_READONLY:-}
       CUMULUSMX_URL: http://cumulusmx:8998
       PORT: "8000"
+    volumes:
+      - mcp-data:/data             # copias previas a cada escritura (restore_backup) y registro de auditoría
     ports:
       - "8000:8000"                # único puerto publicado
     depends_on: [cumulusmx]
     networks: [internal]
+
+volumes:
+  mcp-data: {}
 
 networks:
   internal: {}

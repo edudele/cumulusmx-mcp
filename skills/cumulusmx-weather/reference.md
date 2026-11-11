@@ -1,6 +1,6 @@
 # cumulusmx-mcp reference
 
-Parameter notes for the 83 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
+Parameter notes for the 89 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
 
 ## Read-only tools
 
@@ -38,6 +38,11 @@ Parameter notes for the 83 tools of cumulusmx-mcp. Tool names are in backticks i
 | `records_query` | `dataname` (e.g. `HighTemp`, `LowTemp`, `AvgTemp`, `TotalRain`, `HighGust`, `HighHumidex`, `ET`...), `function` (`min`, `max`, `sum`, `avg`, `count`), `period` (`ThisYear`, `ThisMonth`, `ThisDay`, `Year-N`, `Month-N`, `Day-N` or `User` with `start`/`end`), optional `where` (`>`, `<`, `>=`, `<=`, `=`, `<>`) with `value`. Computed by CumulusMX itself. Returns `{value, time}`. |
 | `graph_select` | `kind` (`chart` or `period`), `series` (names from `graph_data("availabledata")`), `from_date`, `to_date`, optional `colours`. |
 | `live_sample` | `seconds` (max 60), `max_messages` (max 20). Messages from the `/ws/` WebSocket, same JSON as `current_data`. Reports an `error` field if the socket cannot be opened. |
+| `weather_alerts` | Optional `thresholds` (`frost_temp` 3, `wind_gust` 60, `rain_rate` 20, `heat_index` 35, `uv` 8, `pressure_drop_3h` -3, `humidity_low` 20; station units). Returns `hay_alertas`, `alertas` (`tipo`, `nivel` alerta > aviso > info, `mensaje`, `valor`, `umbral`), the conditions used and `avisos` (for example when the station is not metric). |
+| `period_report` | `period` (`week` = 7 days ending at `ref_date`, `month` = day 1 to `ref_date`, `year` = 1 January to `ref_date`), `ref_date` (default: last day with data). Returns Markdown: temperature, rain and streaks, wind, pressure, sun, comparison with the station's normals, missing-data note. |
+| `list_backups` | `kind` (`settings`, `dayfile`, `records` or empty), `limit`. Metadata only: `id`, `creada`, `tipo`, `objetivo`, `herramienta`. |
+| `get_backup` | `backup_id`. Full content (passwords masked with `CUMULUS_MASK_SECRETS` or the read-only token). |
+| `get_audit_log` | `limit`, `tool`. Recent writes: tool, token scope (`full` / `readonly`), arguments without secrets, result (`ok`, `fallo`, `denegado`, `error`). |
 | `monthly_summary` | `year` (2000-2050). One aggregate per month that has data. |
 | `compare_periods` | `start_a`, `end_a`, `start_b`, `end_b`. Returns `{"A": ..., "B": ...}` with the `climate_summary` statistics. |
 | `year_records` | `year`. Extremes, rain totals, wettest day, frost days, warm days (>=25 and >=30 C). Errors if the year has no data. |
@@ -124,6 +129,14 @@ and change nothing.
 | `edit_recent_data` | `action`, `values` (CSV fields of the record, as in `recent_data`). |
 | `edit_mysql_cache` | `action`, `keys`, `statements` (one per key, for `Edit`). |
 | `edit_records` | `scope` (`alltime`, `monthly` with `month` 1-12, `thismonth`, `thisyear`), `field` (e.g. `highTemp`, `lowTemp`, `highGust`, `highDailyRain`, `highMonthlyRain`, `longestDryPeriod`, `highWbgt`; `highMonthlyRain` does not exist for `thismonth`), `value`, `time` (`dd/MM/yyyy HH:mm`, `dd/MM/yyyy` for daily records, `MMM yyyy` for monthly rain). The value is sent with the station's decimal separator. |
+
+### Undo
+
+| Tool | Effect |
+|---|---|
+| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup) or a day-file line. Records backups are informational: fix them with `edit_records`. The restore creates its own backup, so it can be undone too. |
+
+`edit_dayfile` and `edit_records` return JSON with `respuesta` (CumulusMX's answer) and `copia_id`.
 
 ### Diary and device input
 

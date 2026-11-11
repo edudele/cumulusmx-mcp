@@ -18,3 +18,9 @@ Estructura del paquete (de abajo arriba; cada capa solo importa las anteriores):
 """
 
 __version__ = "1.7.0"
+
+import os as _os
+
+# Este servidor guarda credenciales de la estación: que FastMCP no consulte PyPI por su cuenta al arrancar.
+# (Se puede reactivar con FASTMCP_CHECK_FOR_UPDATES=stable.) Debe fijarse antes de que se importe fastmcp.
+_os.environ.setdefault("FASTMCP_CHECK_FOR_UPDATES", "off")

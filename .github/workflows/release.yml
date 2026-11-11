@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Versión a publicar, sin 'v' (ej. 1.5.0). Debe coincidir con __version__ en server.py y tener sección en CHANGELOG.md"
+        description: "Versión a publicar, sin 'v' (ej. 1.5.0). Debe coincidir con __version__ en cumulusmx_mcp/__init__.py y tener sección en CHANGELOG.md"
         required: true
         type: string
 
@@ -34,9 +34,9 @@ jobs:
             echo "Versión inválida: '$VERSION' (usa X.Y.Z, sin 'v')" >&2
             exit 1
           fi
-          code_version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' server.py)
+          code_version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' cumulusmx_mcp/__init__.py)
           if [ "$code_version" != "$VERSION" ]; then
-            echo "La versión pedida ($VERSION) no coincide con __version__ en server.py ($code_version)" >&2
+            echo "La versión pedida ($VERSION) no coincide con __version__ en cumulusmx_mcp/__init__.py ($code_version)" >&2
             exit 1
           fi
           if git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then

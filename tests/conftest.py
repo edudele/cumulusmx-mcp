@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("MCP_AUTH_TOKEN", "test-secret-token-12345")
+# Los tests no deben escribir copias de seguridad salvo que lo pidan explícitamente
+os.environ.setdefault("CUMULUS_BACKUP_DIR", "none")
 
 from cumulusmx_mcp import _facade  # noqa: E402
 

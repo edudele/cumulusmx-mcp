@@ -294,7 +294,7 @@ async def wind_rose(start: str = "", end: str = "") -> str:
 
 BRIEFING_TAGS = ["temp", "feelslike", "dew", "hum", "press", "presstrend", "wlatest", "wgust", "currentwdir", "rrate",
                  "rfall", "SolarRad", "UV", "tempTH", "TtempTH", "tempTL", "TtempTL", "DataStopped", "time", "date",
-                 "tempunit", "pressunit", "windunit", "rainunit"]
+                 "tempunit", "pressunit", "windunit", "rainunit", "forecast", "cloudbasevalue", "cloudbaseunit"]
 
 
 @mcp.tool(annotations=READ_ONLY)

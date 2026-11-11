@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.6.0"
+  version: "1.7.0"
   server: cumulusmx-mcp
 ---
 
@@ -35,6 +35,9 @@ Never invent weather values. Every number you report must come from a tool resul
 | Last spring frost / first autumn frost, frost-free period (planting dates) | `frost_dates` |
 | Growing degree days for a crop (base 10 etc.) | `degree_days` |
 | Prevailing wind directions, rose of the winds | `wind_rose` |
+| "Is there any alert right now?" (frost tonight, wind, heavy rain, heat, UV, pressure drop) | `weather_alerts` |
+| A shareable weekly / monthly / yearly report | `period_report` (Markdown) |
+| What changed, when, by whom; undo a change | `get_audit_log`, `list_backups`, `get_backup`, `restore_backup` |
 | Any configuration section (FTP, MySQL, MQTT, alarms, display...) | `get_settings` (or `get_mysql_settings`, `get_mqtt_settings`) |
 | Raw interval logs with only some fields (no paging), or official day-file fields | `interval_data`, `daily_data` |
 | Server-side day-file query ("max / count of ... this year") | `records_query` |
@@ -84,7 +87,7 @@ Read it before calling `dayfile_range`, `rankings`, `graph_summary` or any write
 
 ## Write tools: ask first
 
-The server also has 28 tools that change the station, its configuration or its files. They are marked
+The server also has 29 tools that change the station, its configuration or its files. They are marked
 destructive. When the server runs with `ENABLE_WRITE_TOOLS=false` they are not published at all
 (and would reply that writes are disabled if called; do not try to work around it).
 
@@ -97,6 +100,7 @@ destructive. When the server runs with `ENABLE_WRITE_TOOLS=false` they are not p
 - MySQL tables: `mysql_table` (create or update the monthly, dayfile or realtime table)
 - History corrections: `edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_mysql_cache`, `edit_records`
 - Device input: `station_input` (sends a reading to the HTTP station endpoint; it is stored as a real observation)
+- Undo: `restore_backup` (restores a settings section or a day-file line from its backup)
 
 Before using any of them:
 
@@ -114,7 +118,10 @@ Before using any of them:
    returns; the line number goes in `line`.
 5. Never change calibration, alarms or rain totals just to make data look better; explain
    the consequence for historical records when the user asks.
-6. Settings payloads contain credentials (FTP, MySQL, MQTT, SMTP, API keys). Do not repeat them in your answer;
+6. **After every write, tell the user the `copia_id`** (when there is one) and that `restore_backup(copia_id)` undoes it.
+   Every write is audited; `get_audit_log` shows what was done. If a write answers that the token is read-only or that
+   writes are disabled, say so and stop: do not look for another way to do it.
+7. Settings payloads contain credentials (FTP, MySQL, MQTT, SMTP, API keys). Do not repeat them in your answer;
    mask secrets when summarizing. With `CUMULUS_MASK_SECRETS=true` the server masks them for you.
 
 ## Ready-made prompts and resources

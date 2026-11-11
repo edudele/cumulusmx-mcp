@@ -91,6 +91,10 @@ def _series_unit(series: str, units: dict[str, str]) -> str | None:
     return base + suffix
 
 
+def _iso_utc(ms: float) -> str:
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M")
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def graph_summary(name: str, start: str = "", end: str = "", points: int = 0) -> str:
     """Resumen estadístico de una serie de gráfica (mín, máx, media, último valor, con hora ISO) en vez de miles de puntos.
@@ -112,16 +116,15 @@ async def graph_summary(name: str, start: str = "", end: str = "", points: int =
         vals = [(p[0], utils._num(p[1])) for p in pts if isinstance(p, list) and len(p) >= 2 and utils._num(p[1]) is not None]
         if not vals:
             continue
-        iso = lambda ms: datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M")
         mn, mx = min(vals, key=lambda x: x[1]), max(vals, key=lambda x: x[1])
-        d = {"n": len(vals), "min": mn[1], "min_en": iso(mn[0]), "max": mx[1], "max_en": iso(mx[0]),
+        d = {"n": len(vals), "min": mn[1], "min_en": _iso_utc(mn[0]), "max": mx[1], "max_en": _iso_utc(mx[0]),
              "media": round(sum(v for _, v in vals) / len(vals), 2), "ultimo": vals[-1][1],
-             "ultimo_en": iso(vals[-1][0]), "primero_en": iso(vals[0][0]), "nota_hora": "ISO en UTC"}
+             "ultimo_en": _iso_utc(vals[-1][0]), "primero_en": _iso_utc(vals[0][0]), "nota_hora": "ISO en UTC"}
         if (unidad := _series_unit(serie, units)):
             d["unidad"] = unidad
         if points > 0:
             step = max(1, len(vals) // min(points, 300))
-            d["serie"] = [[iso(t), v] for t, v in vals[::step]]
+            d["serie"] = [[_iso_utc(t), v] for t, v in vals[::step]]
         out[serie] = d
     return json.dumps(out, ensure_ascii=False)
 

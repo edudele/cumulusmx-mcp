@@ -10,7 +10,7 @@ import sys
 import types
 import urllib.parse
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     port = args.port if args.port is not None else config.PORT
     _log_startup(args.transport, args.host, port)
     if args.transport == "stdio":
-        mcp.run(transport="stdio")
+        mcp.run(transport="stdio", show_banner=False)   # stdout es el canal del protocolo: nada de banner
         return
     import uvicorn
 

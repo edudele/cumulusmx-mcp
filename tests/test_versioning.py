@@ -62,13 +62,7 @@ async def test_rankings_default_start_year_uses_env_setting():
     assert mock_rows.await_args.kwargs["start_year"] == 2019
 
 
-def _is_read_only(tool) -> bool:
-    ann = tool.annotations
-    if ann is None:
-        return False
-    # FastMCP/MCP SDK v2 renombra readOnlyHint -> read_only_hint
-    value = getattr(ann, "read_only_hint", None)
-    return bool(value if value is not None else getattr(ann, "readOnlyHint", False))
+from tests.compat import is_read_only as _is_read_only  # noqa: E402
 
 
 def _skill_frontmatter() -> dict[str, str]:

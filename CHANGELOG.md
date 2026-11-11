@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.7.0]
+
+### Added
+- **Safety net for the write tools**
+  - Every write is audited (tool, token scope, arguments with secrets masked, result `ok` / `fallo` / `denegado` / `error`)
+    in the log and, with `CUMULUS_AUDIT_FILE`, in a JSON-Lines file. New tool `get_audit_log`.
+  - Automatic backups before changing a settings section, a day-file line or the records (`CUMULUS_BACKUP_DIR`,
+    `CUMULUS_BACKUP_KEEP`; files `0600`). New tools `list_backups`, `get_backup` and `restore_backup` (settings and day-file
+    lines; `dry_run` by default; a restore is itself undoable). `edit_dayfile` and `edit_records` now return a JSON envelope
+    with `respuesta` and `copia_id`.
+  - Optional read-only token `MCP_AUTH_TOKEN_READONLY`: reads work, writes are refused, settings come back with passwords masked.
+- `weather_alerts`: frost (registered today / in progress / night risk), strong wind, intense rain, heat, UV, fast pressure drop,
+  dry hot air and station without data, with overridable thresholds and a warning when the station is not metric.
+- `period_report`: shareable Markdown report for a week, month or year, with a comparison with the station's own normals.
+- `daily_briefing` also returns the CumulusMX forecast (`forecast`) and cloud base.
+- **Runs anywhere**: `cumulusmx-mcp` console script, `python -m cumulusmx_mcp`, `--transport stdio` for local clients
+  (Claude Desktop...), `--host`, `--port`, `--version`; installable with `pip` / `uvx`.
+- Pinned runtime dependencies (`requirements.txt`), Dependabot, ruff, a Docker image smoke test and an informational
+  `pip-audit` job in CI, and a CI matrix of Python 3.10 / 3.12 / 3.13 x FastMCP 3.x / 4.x (both majors pass the whole suite).
+- `scripts/smoke_readonly.py`: read-only smoke test of a deployed server.
+- `docs/ARCHITECTURE.md` and `CONTRIBUTING.md`.
+
+### Changed
+- **The code is now a package.** `server.py` (2800 lines) is split into `cumulusmx_mcp/`: config, utils, safety, backups, client,
+  app, dayrows, analysis, settings_engine, alerts, reporting, `tools/*`, prompts, resources and cli. `server.py` remains as a shim:
+  `python server.py` and `import server` keep working. Tests enforce the layering and that modules reference each other through
+  the module (so patches work).
+- The classic `update_station_settings`, `update_calibration_settings` and `update_alarm_settings` use the same safe engine as
+  `update_settings`: they no longer overwrite a section with just the fragment when the current settings cannot be read
+  (they raise instead), and they keep a backup. Their text response is unchanged.
+- The Docker image installs the pinned dependencies and the package, starts with `cumulusmx-mcp`, and declares `/data`
+  (backups and audit file). The compose example mounts a volume and exposes the read-only token.
+- Release workflows read the version from `cumulusmx_mcp/__init__.py`.
+- FastMCP's PyPI update check is disabled by default (`FASTMCP_CHECK_FOR_UPDATES=off`); stdio mode prints no banner.
+
+### Fixed
+- `edit_records` detected the station's decimal separator with a pattern that required compact JSON; with spaces it would have
+  sent `34.6` to a decimal-comma station, which reads it as 346. Found by the new CumulusMX simulator.
+- `dayrows._agg` raised `KeyError` on day-file rows shorter than the current format.
+
 ## [1.6.0]
 
 Full coverage of the CumulusMX API (endpoint names, parameters and request formats verified in the 5.2.0 source).

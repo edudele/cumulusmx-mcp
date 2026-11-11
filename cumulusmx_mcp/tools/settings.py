@@ -1,13 +1,11 @@
 """Tools de configuración: estación, calibración, alarmas, MySQL, MQTT, NOAA y ajustes genéricos."""
 import json
-import urllib.parse
 from typing import Any, Literal
 
 
 from .. import client
 from .. import safety
 from .. import settings_engine
-from .. import utils
 from ..app import READ_ONLY, mcp, write_tool
 
 
@@ -22,22 +20,7 @@ async def update_station_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza la configuración de la estación meteorológica en CumulusMX."""
     if (err := safety._check_write_enabled()):
         return err
-    new_data = utils._normalize_settings_payload(settings)
-    try:
-        current_data = await client._json("/api/settings/stationdata.json")
-        if isinstance(current_data, dict):
-            merged = utils._deep_merge(dict(current_data), new_data)
-        else:
-            merged = new_data
-    except Exception:
-        merged = new_data
-    json_str = json.dumps(merged)
-    body = "json=" + urllib.parse.quote(json_str)
-    return await client._post(
-        "/api/setsettings/updatestationconfig.json",
-        content=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
+    return await settings_engine.legacy_update("station", settings)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -51,22 +34,7 @@ async def update_calibration_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza los factores y offsets de calibración de los sensores en CumulusMX."""
     if (err := safety._check_write_enabled()):
         return err
-    new_data = utils._normalize_settings_payload(settings)
-    try:
-        current_data = await client._json("/api/settings/calibrationdata.json")
-        if isinstance(current_data, dict):
-            merged = utils._deep_merge(dict(current_data), new_data)
-        else:
-            merged = new_data
-    except Exception:
-        merged = new_data
-    json_str = json.dumps(merged)
-    body = "json=" + urllib.parse.quote(json_str)
-    return await client._post(
-        "/api/setsettings/updatecalibrationconfig.json",
-        content=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
+    return await settings_engine.legacy_update("calibration", settings)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -83,30 +51,7 @@ async def update_alarm_settings(settings: dict[str, Any] | str) -> str:
     """Actualiza la configuración de alarmas y umbrales en CumulusMX."""
     if (err := safety._check_write_enabled()):
         return err
-    new_data = utils._normalize_settings_payload(settings)
-    try:
-        current_data = await client._json("/api/settings/alarms.json")
-        if isinstance(current_data, dict):
-            if "data" in new_data or "units" in new_data or "email" in new_data:
-                merged = utils._deep_merge(dict(current_data), new_data)
-            else:
-                current_copy = dict(current_data)
-                current_data_section = current_copy.get("data", {})
-                if isinstance(current_data_section, dict):
-                    current_copy["data"] = utils._deep_merge(dict(current_data_section), new_data)
-                else:
-                    current_copy["data"] = new_data
-                merged = current_copy
-        else:
-            merged = new_data if "data" in new_data else {"data": new_data}
-    except Exception:
-        merged = new_data if "data" in new_data else {"data": new_data}
-
-    return await client._post(
-        "/api/setsettings/updatealarmconfig.json",
-        content=urllib.parse.quote(json.dumps(merged)),  # CumulusMX aplica UrlDecode al cuerpo
-        headers={"Content-Type": "application/json"},
-    )
+    return await settings_engine.legacy_update("alarms", settings)
 
 
 @mcp.tool(annotations=READ_ONLY)
