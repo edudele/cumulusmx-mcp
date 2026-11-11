@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
-RUN pip install "fastmcp>=3,<5" httpx
+RUN pip install "fastmcp>=3,<5" httpx websockets tzdata
 COPY server.py .
 RUN useradd -r -u 10001 mcp
 USER mcp

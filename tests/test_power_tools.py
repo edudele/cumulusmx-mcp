@@ -370,12 +370,12 @@ LIST_CODE = (
 class TestReadOnlyMode:
     def test_default_publishes_all_tools(self):
         info = json.loads(run_isolated(LIST_CODE))
-        assert info["total"] == 58 and info["ro"] == 43
+        assert info["total"] == 83 and info["ro"] == 55
 
     @pytest.mark.parametrize("value", ["false", "0", "no", "off", "FALSE"])
     def test_write_tools_are_not_published_when_disabled(self, value):
         info = json.loads(run_isolated(LIST_CODE, ENABLE_WRITE_TOOLS=value))
-        assert info["total"] == 43 and info["ro"] == 43
+        assert info["total"] == 55 and info["ro"] == 55
         for name in ("edit_rain_today", "update_station_settings", "clear_alarms", "trigger_ftp", "test_email",
                      "delete_diary", "upload_reports"):
             assert name not in info["names"], name

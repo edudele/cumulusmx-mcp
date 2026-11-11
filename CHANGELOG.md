@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.6.0]
+
+Full coverage of the CumulusMX API (endpoint names, parameters and request formats verified in the 5.2.0 source).
+
+### Added
+- Settings: `get_settings(section)` and `update_settings(section, settings, dry_run, replace)` for all 18 sections
+  (`program`, `station`, `internet`, `thirdparty`, `extrasensors`, `extrawebfiles`, `calibration`, `language`, `noaa`, `mysql`,
+  `alarms`, `useralarms`, `wizard`, `customlogs_interval`, `customlogs_daily`, `display`, `httpfiles`, `mqtt`). The update reads
+  the current section, deep-merges only the given fields, returns the changed paths (before/after, secrets masked), supports a
+  `dry_run` preview and never writes if the current settings cannot be read.
+- MySQL and MQTT: `get_mysql_settings`, `update_mysql_settings`, `mysql_table` (create/update the monthly, dayfile and realtime
+  tables), `mysql_cache`, `edit_mysql_cache`, `get_mqtt_settings`, `update_mqtt_settings`; also `update_noaa_settings`.
+- Data access: `interval_data` and `daily_data` (field selection by official names, readable dates with `CUMULUS_TIMEZONE` or Unix
+  seconds, numbers with regional decimal commas converted), `records_query` (server-side day-file queries), `graph_select`
+  (Select-a-Chart / Select-a-Period), `live_sample` (WebSocket `/ws/`), `records_edit_data`, `diary_export`,
+  `get_current_conditions_text`.
+- History corrections and diary: `edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_records` (value sent with the station's
+  decimal separator), `diary_upload`, `diary_automate`.
+- `station_input`: HTTP station endpoints (`ecowitt`, `ecowittextra`, `json`, `jsonextra`, `wunderground`, `ambient`, `ambientextra`).
+- `generate_reports(report_type="all")`; `station_info` accepts `dateformat` and `csvseparator`.
+- `CUMULUS_TIMEZONE` and `CUMULUS_MASK_SECRETS` (mask passwords/keys in settings reads; off by default).
+- Tool count: 83 (55 read-only, 28 write). `websockets` and `tzdata` added to the Docker image and the CI install.
+
+### Fixed
+- `update_alarm_settings` sent the JSON body unencoded, but CumulusMX URL-decodes it, so a `+` or `%` in a value (for example an
+  SMTP password) was corrupted. The body is now URL-encoded.
+
 ## [1.5.0]
 
 ### Added

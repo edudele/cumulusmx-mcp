@@ -16,6 +16,7 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Today / yesterday** — highs, lows and times for all variables.
 - **Historical data & Analytics** — daily summaries from dayfile across all years, flexible column alias filtering (`date`, `mintemp`, `rain`, etc.) and aggregated statistical summaries (`summary_only`).
 - **Agronomy & climate tools** — `climatology` (monthly normals), `frost_dates` (last spring / first autumn frost, frost-free period), `degree_days` (growing degree days), `wind_rose` (16-point rose) and `daily_briefing` (live conditions + yesterday in context + month vs normal + streaks in progress).
+- **Full CumulusMX API coverage** — read *and* write: every settings section (`get_settings` / `update_settings` with merge, `dry_run` preview and no blind writes), dedicated **MySQL** and **MQTT** tools (`get_/update_mysql_settings`, `mysql_table`, `get_/update_mqtt_settings`, `mysql_cache`), history corrections (`edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_records`), diary import/export, `interval_data` / `daily_data`, `records_query`, custom charts, WebSocket `live_sample` and HTTP station input. See [API coverage](#api-coverage).
 - **Resilient** — GET requests to CumulusMX are retried with backoff on transient failures; timeouts are configurable.
 - **Agent-ready** — the server sends usage instructions to MCP clients (which tool for which question, units, decimal conventions, write-tool etiquette).
 - **Climate analytics** — `count_days`, `find_streaks`, `anomaly` and `data_quality` answer "how many days above 35 °C?", "longest dry spell?", "was this July warmer than normal?" and "can I trust the history?" from the station's own data, with no extra CumulusMX endpoints.
@@ -80,6 +81,8 @@ See [`.env.example`](.env.example) for all variables.
 | `CUMULUS_DATA_START_YEAR` | | `2023` | First year of station data for caching and default rankings range |
 | `CUMULUS_FROST_THRESHOLD` | | `0.0` | Temperature threshold (°C) to count frost days |
 | `CUMULUS_CACHE_TTL` | | `600` | In-memory cache TTL in seconds for current year dayfile data |
+| `CUMULUS_TIMEZONE` | | — | IANA time zone of the station (e.g. `Europe/Madrid`). Needed only to give readable dates (`2025-01-31 14:00`) to `interval_data` / `daily_data`; Unix seconds always work |
+| `CUMULUS_MASK_SECRETS` | | `false` | `true` masks passwords and keys (`pass`, `password`, `phpsecret`, API keys...) in `get_settings`, `get_mysql_settings` and `get_mqtt_settings`. Off by default: the server returns the configuration as CumulusMX does |
 | `CUMULUS_TIMEOUT` | | `30` | Timeout in seconds for each request to CumulusMX |
 | `CUMULUS_RETRIES` | | `2` | Retries (exponential backoff) of GET requests on connection errors, timeouts and HTTP 502/504. POST requests are never retried |
 | `CUMULUS_USER` | | — | HTTP Basic Auth username for CumulusMX API (optional) |
@@ -88,7 +91,7 @@ See [`.env.example`](.env.example) for all variables.
 | `LOG_LEVEL` | | `info` | Log verbosity: `info`, `debug`, `warning`, `error` |
 
 > **Security tip:** write tools are enabled by default. If you only need to query your station, set
-> `ENABLE_WRITE_TOOLS=false`: the 15 write tools are then **not published at all** (clients only see the 43 read-only
+> `ENABLE_WRITE_TOOLS=false`: the 28 write tools are then **not published at all** (clients only see the 55 read-only
 > tools), and they would refuse to run even if called directly.
 
 ---
@@ -98,7 +101,7 @@ See [`.env.example`](.env.example) for all variables.
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.5.0"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.6.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -206,6 +209,45 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 |---|---|
 | `get_error_log` | Retrieve system warning and error log entries |
 
+### Configuration, MySQL & MQTT
+
+| Tool | Description |
+|---|---|
+| `get_settings` | Read any of the 18 settings sections: `program`, `station`, `internet`, `thirdparty`, `extrasensors`, `extrawebfiles`, `calibration`, `language`, `noaa`, `mysql`, `alarms`, `useralarms`, `wizard`, `customlogs_interval`, `customlogs_daily`, `display`, `httpfiles`, `mqtt` |
+| `update_settings` | Change any section: reads the current one, deep-merges only your fields (or `replace=true`), sends it in the format the endpoint expects. `dry_run=true` shows the diff without applying. Never writes if the current settings cannot be read |
+| `get_mysql_settings` / `update_mysql_settings` | MySQL connection, monthly/dayfile/realtime tables, retention and custom commands |
+| `mysql_table` | Create or update the `monthly`, `dayfile` or `realtime` MySQL table |
+| `mysql_cache` / `edit_mysql_cache` | Inspect and edit/delete the pending SQL commands that failed to reach MySQL |
+| `get_mqtt_settings` / `update_mqtt_settings` | MQTT broker, credentials, TLS, topics and templates |
+| `update_noaa_settings` | NOAA report settings (counterpart of `get_noaa_settings`) |
+
+### Data access, queries and real time
+
+| Tool | Description |
+|---|---|
+| `interval_data` | Interval logs for a range with only the fields you ask for (main log and extra-sensor log), no paging |
+| `daily_data` | Day-file fields by their official CumulusMX names for a range |
+| `records_query` | Day-file query computed by CumulusMX (min/max/sum/avg/count, optional condition and period) |
+| `graph_select` | Custom "Select-a-Chart" / "Select-a-Period" series for a date range |
+| `live_sample` | Listen to the `/ws/` WebSocket for a few seconds and return the live messages |
+| `records_edit_data` | Record-editing screen data (current values, or candidates from the day file / logs) |
+| `diary_export` | Whole diary as CSV |
+| `get_current_conditions_text` | Current-conditions text |
+
+### History corrections, diary and device input (write)
+
+| Tool | Description |
+|---|---|
+| `edit_dayfile` | Edit or delete one `dayfile.txt` line (date-checked; updates SQLite and MySQL if enabled) |
+| `edit_datalog` | Edit or delete one line of a monthly interval log (or extra-sensor log) |
+| `edit_recent_data` | Edit or delete a row of the recent-data table |
+| `edit_records` | Correct an all-time, monthly, this-month or this-year record (sends the value with the station's decimal separator) |
+| `diary_upload` / `diary_automate` | Import diary entries from CSV / choose the laser snow sensor that fills the diary |
+| `station_input` | Send a reading to the HTTP station endpoints (`ecowitt`, `json`, `wunderground`, `ambient`...) to test a station setup |
+| `generate_reports` | Also accepts `report_type="all"` to generate every missing report |
+
+> **Back up before editing history.** The `edit_*` tools rewrite `dayfile.txt`, log files and record files.
+
 ### Data Editing (/edit/*)
 
 | Tool | Description |
@@ -227,6 +269,27 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 | `update_alarm_settings` | Update alarm thresholds and notification settings |
 | `get_noaa_settings` | Get NOAA report generation configuration |
 | `test_email` | Send a test email to verify alarm SMTP settings |
+
+---
+
+## API coverage
+
+Checked against the `Api.cs` controllers of CumulusMX 5.2.0 (217 named endpoints):
+
+| Area | Status |
+|---|---|
+| Data, logs, diary, graphs, records, today/yesterday, extra sensors, tags, reports, info | Covered (read) |
+| Settings: all 18 sections, read and write | Covered (`get_settings`, `update_settings` + dedicated MySQL/MQTT/NOAA tools) |
+| MySQL tables (`create*sql`, `update*sql`) and failed-command cache | Covered |
+| Utilities (reload day file, purge MySQL, FTP now, clear alarms/error log), report generation and upload | Covered |
+| Data editor: day file, interval logs, recent data, MySQL cache, records, rain today, current conditions, diary | Covered |
+| `intervaldata` / `dailydata`, `records/query`, `selectachart` / `selectaperiod`, WebSocket `/ws/` | Covered (`interval_data`, `daily_data`, `records_query`, `graph_select`, `live_sample`) |
+| HTTP station input (`/station/ecowitt`, `json`, `wunderground`, `ambient`...) | Covered (`station_input`) |
+| Web dashboard pages, static assets and localisation files (`/`, `/js`, `/json`, `/ai2`) | Not exposed: they are the CumulusMX web UI, not data |
+
+The write operations were verified against the CumulusMX source and with mocked tests; they are not exercised against a
+live station by the test suite. Settings and editors take effect on the real station, so use `dry_run` for settings and keep backups
+before editing history.
 
 ---
 
@@ -293,7 +356,7 @@ To cut a release:
 Tests run on every pull request and on pushes to any branch except `main` (`.github/workflows/tests.yml`):
 
 ```bash
-pip install "fastmcp>=3,<5" httpx pytest pytest-asyncio
+pip install "fastmcp>=3,<5" httpx websockets tzdata pytest pytest-asyncio
 MCP_AUTH_TOKEN=test python -m pytest -q
 ```
 

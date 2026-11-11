@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install "fastmcp>=3,<5" httpx pytest pytest-asyncio
+        run: pip install "fastmcp>=3,<5" httpx websockets tzdata pytest pytest-asyncio
 
       - name: Run tests
         env:

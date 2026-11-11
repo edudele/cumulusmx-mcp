@@ -1,6 +1,6 @@
 # cumulusmx-mcp reference
 
-Parameter notes for the 58 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
+Parameter notes for the 83 tools of cumulusmx-mcp. Tool names are in backticks in the first column.
 
 ## Read-only tools
 
@@ -27,6 +27,17 @@ Parameter notes for the 58 tools of cumulusmx-mcp. Tool names are in backticks i
 | `degree_days` | Optional `start`/`end` (default: 1 January of this year to the last day with data), `base` (default 10), `upper`, `method` (`average`, or `modified` which floors tmin at `base` and caps tmax at `upper`). Totals overall, `por_mes`, `por_anio`, in the station's temperature units. |
 | `wind_rose` | Optional `start`/`end`. 16 sectors with days and percentage of the dominant daily direction, plus the peak gust per gust direction. A bearing of 0 can mean calm. |
 | `daily_briefing` | No parameters. `ahora` (live tags, plain numbers), `datos_hasta` (last closed day), `ultimo_dia_cerrado_en_contexto` (percentile/rank of its Tmax, Tmin and rain vs the same month in other years), `mes_en_curso` (month-to-date anomaly of temperature and rain), `rachas_en_curso` (dry, Tmax >= 30, frost). Warns when the history is stale and degrades when live data or history is unavailable. |
+| `get_settings` | `section`: `program`, `station`, `internet`, `thirdparty`, `extrasensors`, `extrawebfiles`, `calibration`, `language`, `noaa`, `mysql`, `alarms`, `useralarms`, `wizard`, `customlogs_interval`, `customlogs_daily`, `display`, `httpfiles`, `mqtt`. Same structure that `update_settings` accepts. May contain passwords (masked when `CUMULUS_MASK_SECRETS=true`). |
+| `get_mysql_settings`, `get_mqtt_settings` | Shortcuts for `get_settings("mysql")` and `get_settings("mqtt")`. MySQL: `server{host,port,user,pass,database,advanced{sslMode,tlsVers}}`, `options`, `monthly`, `realtime`, `dayfile`, `custom*`. |
+| `mysql_cache` | `start`, `length` (max 500), `search`. Pending SQL commands that failed to reach MySQL. |
+| `diary_export` | Whole diary as CSV text. |
+| `get_current_conditions_text` | The current-conditions text published by CumulusMX. |
+| `records_edit_data` | `scope`: `alltime`, `monthly`, `thismonth`, `thisyear`; `source`: `records` (current values), `dayfile` or `logfile` (candidates, slower). |
+| `interval_data` | `start`, `end` (Unix seconds, or `yyyy-mm-dd` / `yyyy-mm-dd HH:MM` when the server has `CUMULUS_TIMEZONE`), `fields` (main-log names such as `Temperature`, `Humidity`, `DewPoint`, `WindSpeed`, `RecentHighGust`, `RainfallRate`, `SeaLevelPressure`, `UvIndex`, `SolarRadiation`, `FeelsLike`, `Humidex`, `BGT`, `WBGT`; extra-sensor log names such as `Temp1`, `SoilTemp1`, `SoilMoist1`, `LeafWet1`, `CO2`, `SoilEC1`; or numeric indexes), `max_rows` (max 2000). Returns `campos` and `filas` with real numbers. |
+| `daily_data` | Same arguments with the official day-file names (`MaxTemperature`, `MinTemperature`, `TotalRainfallToday`, `HighWindGust`, `TotalHoursOfSunshine`, `HighBgt`, ...). |
+| `records_query` | `dataname` (e.g. `HighTemp`, `LowTemp`, `AvgTemp`, `TotalRain`, `HighGust`, `HighHumidex`, `ET`...), `function` (`min`, `max`, `sum`, `avg`, `count`), `period` (`ThisYear`, `ThisMonth`, `ThisDay`, `Year-N`, `Month-N`, `Day-N` or `User` with `start`/`end`), optional `where` (`>`, `<`, `>=`, `<=`, `=`, `<>`) with `value`. Computed by CumulusMX itself. Returns `{value, time}`. |
+| `graph_select` | `kind` (`chart` or `period`), `series` (names from `graph_data("availabledata")`), `from_date`, `to_date`, optional `colours`. |
+| `live_sample` | `seconds` (max 60), `max_messages` (max 20). Messages from the `/ws/` WebSocket, same JSON as `current_data`. Reports an `error` field if the socket cannot be opened. |
 | `monthly_summary` | `year` (2000-2050). One aggregate per month that has data. |
 | `compare_periods` | `start_a`, `end_a`, `start_b`, `end_b`. Returns `{"A": ..., "B": ...}` with the `climate_summary` statistics. |
 | `year_records` | `year`. Extremes, rain totals, wettest day, frost days, warm days (>=25 and >=30 C). Errors if the year has no data. |
@@ -74,6 +85,9 @@ solar W/m2.
 
 ## Write tools (destructive, ask first)
 
+Configuration writes return JSON: `seccion`, `campos_modificados` (`{path: {antes, despues}}`, secrets always masked),
+`aplicado`, `respuesta`. With `dry_run=true` nothing is sent. With no differences nothing is sent either.
+
 | Tool | Effect |
 |---|---|
 | `reloaddayfile` | Reloads `dayfile.txt` in CumulusMX and clears the local cache. Safe, but run it only after editing the day file. |
@@ -92,3 +106,31 @@ solar W/m2.
 
 When writes are disabled (`ENABLE_WRITE_TOOLS=false`) these tools return an error message
 and change nothing.
+
+### Configuration, MySQL, MQTT
+
+| Tool | Effect |
+|---|---|
+| `update_settings` | `section` (same names as `get_settings`), `settings` (object or JSON string), `dry_run`, `replace`. Reads the current section, deep-merges only the given fields (or replaces the section with `replace=true`) and sends it in the format each endpoint expects. Refuses to write if the current section cannot be read. |
+| `update_mysql_settings`, `update_mqtt_settings`, `update_noaa_settings` | `settings`, `dry_run`. Partial merge of that section. |
+| `mysql_table` | `action` (`create` or `update`), `table` (`monthly`, `dayfile`, `realtime`). Creates the table or adapts its structure. Run it after configuring and enabling the table. |
+
+### History corrections (rewrite files: back up first)
+
+| Tool | Effect |
+|---|---|
+| `edit_dayfile` | `action` (`Edit` or `Delete`), `line` (1-based, the first value returned by `dayfile`), `values` (the fields of that `dayfile.txt` line, date `dd/MM/yy` first, without the line number). CumulusMX checks the date matches. Also updates SQLite and, if enabled, MySQL. |
+| `edit_datalog` | `action`, `line` (1-based within the month's log), `values` (all fields; the second one is the Unix `TS` that selects the file), `extra` (true for the extra-sensor log). |
+| `edit_recent_data` | `action`, `values` (CSV fields of the record, as in `recent_data`). |
+| `edit_mysql_cache` | `action`, `keys`, `statements` (one per key, for `Edit`). |
+| `edit_records` | `scope` (`alltime`, `monthly` with `month` 1-12, `thismonth`, `thisyear`), `field` (e.g. `highTemp`, `lowTemp`, `highGust`, `highDailyRain`, `highMonthlyRain`, `longestDryPeriod`, `highWbgt`; `highMonthlyRain` does not exist for `thismonth`), `value`, `time` (`dd/MM/yyyy HH:mm`, `dd/MM/yyyy` for daily records, `MMM yyyy` for monthly rain). The value is sent with the station's decimal separator. |
+
+### Diary and device input
+
+| Tool | Effect |
+|---|---|
+| `diary_upload` | `csv_content`: header line plus one record per line, as produced by `diary_export`. |
+| `diary_automate` | `sensor` 1-4 selects the laser snow sensor that fills the diary; 0 disables automation. |
+| `station_input` | `protocol` (POST: `ecowitt`, `ecowittextra`, `json`, `jsonextra`; GET: `ecowitt`, `ecowittextra`, `wunderground`, `ambient`, `ambientextra`), `method`, `body`, `query`, `content_type`. Sends a reading to `/station/<protocol>`; fails with 503 if the configured station is not of that type. Stored as a real observation. |
+
+`generate_reports` also accepts `report_type="all"` to generate every missing report.

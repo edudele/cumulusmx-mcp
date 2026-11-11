@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.5.0"
+  version: "1.6.0"
   server: cumulusmx-mcp
 ---
 
@@ -35,6 +35,13 @@ Never invent weather values. Every number you report must come from a tool resul
 | Last spring frost / first autumn frost, frost-free period (planting dates) | `frost_dates` |
 | Growing degree days for a crop (base 10 etc.) | `degree_days` |
 | Prevailing wind directions, rose of the winds | `wind_rose` |
+| Any configuration section (FTP, MySQL, MQTT, alarms, display...) | `get_settings` (or `get_mysql_settings`, `get_mqtt_settings`) |
+| Raw interval logs with only some fields (no paging), or official day-file fields | `interval_data`, `daily_data` |
+| Server-side day-file query ("max / count of ... this year") | `records_query` |
+| Custom chart over a date range | `graph_select` |
+| The few next seconds of live data | `live_sample` |
+| Pending MySQL commands, diary CSV, current-conditions text | `mysql_cache`, `diary_export`, `get_current_conditions_text` |
+| Record-editing screens (candidate values) | `records_edit_data` |
 | This period vs that period | `compare_periods` |
 | Raw daily rows or specific columns | `dayfile_range` (use `summary_only=true` first) |
 | All-time / this-month / this-year records | `records_all` (or `records` for one category) |
@@ -77,24 +84,38 @@ Read it before calling `dayfile_range`, `rankings`, `graph_summary` or any write
 
 ## Write tools: ask first
 
-The server also has 15 tools that change the station or its files. They are marked
+The server also has 28 tools that change the station, its configuration or its files. They are marked
 destructive. When the server runs with `ENABLE_WRITE_TOOLS=false` they are not published at all
 (and would reply that writes are disabled if called; do not try to work around it).
 
-- `reloaddayfile`, `clear_alarms`, `clear_error_log`, `purgemysql`, `trigger_ftp`,
+- Maintenance and reports: `reloaddayfile`, `clear_alarms`, `clear_error_log`, `purgemysql`, `trigger_ftp`,
   `generate_reports`, `upload_reports`, `test_email`
-- `edit_current_conditions`, `edit_rain_today`, `edit_diary`, `delete_diary`
-- `update_station_settings`, `update_calibration_settings`, `update_alarm_settings`
+- Live values and diary: `edit_current_conditions`, `edit_rain_today`, `edit_diary`, `delete_diary`,
+  `diary_upload`, `diary_automate`
+- Configuration (any section): `update_settings`, plus `update_station_settings`, `update_calibration_settings`,
+  `update_alarm_settings`, `update_noaa_settings`, `update_mysql_settings`, `update_mqtt_settings`
+- MySQL tables: `mysql_table` (create or update the monthly, dayfile or realtime table)
+- History corrections: `edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_mysql_cache`, `edit_records`
+- Device input: `station_input` (sends a reading to the HTTP station endpoint; it is stored as a real observation)
 
 Before using any of them:
 
 1. Say exactly what will change and on which values, and wait for an explicit "yes".
-2. For settings, call the matching `get_*_settings` tool first and show the current value.
-   Updates are partial merges, so send only the fields that must change.
-3. Never change calibration, alarms or rain totals just to make data look better; explain
+2. For configuration, read it first (`get_settings` or the specific getter), then call the update with
+   `dry_run=true` and show the user the `campos_modificados` diff. Apply only after they confirm.
+   Updates are partial merges: send only the fields that must change. If the current configuration cannot be
+   read, nothing is written. Some changes need a CumulusMX restart.
+3. **MySQL setup**: `get_mysql_settings` -> `update_mysql_settings` (host, port, user, pass, database, then enable
+   monthly/dayfile/realtime) -> `mysql_table(action="create", ...)` for each enabled table -> check `mysql_cache`
+   for pending commands. **MQTT**: `get_mqtt_settings` -> `update_mqtt_settings`.
+4. **History edits** (`edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_records`) rewrite files. Tell the user to
+   back up first, show the original row (from `dayfile` / `logfile`) next to the new one, and edit one row at a time.
+   `edit_dayfile` takes the fields of the `dayfile.txt` line *without* the leading line number that `dayfile`
+   returns; the line number goes in `line`.
+5. Never change calibration, alarms or rain totals just to make data look better; explain
    the consequence for historical records when the user asks.
-4. Settings payloads can contain credentials (FTP, SMTP, API keys). Never echo them back
-   in full; mask secrets when summarizing.
+6. Settings payloads contain credentials (FTP, MySQL, MQTT, SMTP, API keys). Do not repeat them in your answer;
+   mask secrets when summarizing. With `CUMULUS_MASK_SECRETS=true` the server masks them for you.
 
 ## Ready-made prompts and resources
 

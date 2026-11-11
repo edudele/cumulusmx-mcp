@@ -1,5 +1,6 @@
 """MCP para CumulusMX (lectura, escritura, informes y mantenimiento). Habla con su API HTTP por la red interna."""
 import asyncio
+import base64
 import calendar
 import collections
 import datetime
@@ -24,7 +25,7 @@ from starlette.responses import JSONResponse
 
 # Versión semántica del servidor. Debe coincidir con la cabecera de CHANGELOG.md
 # y con el tag de git (vX.Y.Z) que dispara la publicación de la imagen Docker.
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 logging.basicConfig(
@@ -95,6 +96,9 @@ Which tool:
 - History (daily): count_days, find_streaks, rankings, climate_summary, monthly_summary, year_records,
   compare_periods, dayfile_range (use summary_only=true first). Normals and anomalies: climatology, anomaly.
 - Gardening/agronomy: frost_dates, degree_days. Wind: wind_rose. Trustworthiness of the data: data_quality.
+- Configuration: get_settings(section) / update_settings(section, settings, dry_run=true first); dedicated
+  get/update_mysql_settings, get/update_mqtt_settings and mysql_table. Real time: live_sample. Fine-grained logs:
+  interval_data, daily_data.
 - Short ranges / intervals: graph_summary (prefer it over graph_data). Reports: noaa_report, simple_report.
 
 Conventions: dates are yyyy-mm-dd; day-file columns have Spanish names (temp_max, lluvia_total, racha_max...) and accept
@@ -103,7 +107,8 @@ reports) follows the station's regional format and may use decimal commas ("10,0
 for "no data" and 0 % humidity is almost always a sensor fault: run data_quality before quoting extremes.
 
 Write tools (edit_*, update_*, clear_*, trigger_*, generate_/upload_reports...) change the station: describe the change
-and get explicit confirmation first; read the current settings before updating them. They are absent when the server
+and get explicit confirmation first; preview settings changes with dry_run=true. Settings can contain passwords:
+do not echo them back. Back up before editing history (edit_dayfile, edit_datalog, edit_records). They are absent when the server
 runs with ENABLE_WRITE_TOOLS=false.
 """
 
@@ -422,9 +427,12 @@ async def dayfile(start: int = 0, length: int = 31, search: str = "") -> str:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def station_info(kind: Literal["version", "units", "alarms", "snowinfo", "timeformat", "wsport", "displaylangs"]) -> str:
-    """Información de la estación: versión, unidades, alarmas..."""
-    return await _get(f"/api/info/{kind}.json")
+async def station_info(kind: Literal["version", "units", "alarms", "snowinfo", "timeformat", "wsport", "displaylangs",
+                                     "dateformat", "csvseparator"]) -> str:
+    """Información de la estación: versión, unidades, alarmas, formato de fecha (dateformat), separador CSV
+    (csvseparator), idiomas, puerto WebSocket..."""
+    ext = "txt" if kind in ("dateformat", "csvseparator") else "json"
+    return await _get(f"/api/info/{kind}.{ext}")
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -1726,13 +1734,16 @@ async def purgemysql() -> str:
 
 @write_tool
 async def generate_reports(
-    report_type: Literal["year", "month"] = "month",
+    report_type: Literal["year", "month", "all"] = "month",
     year: int | None = None,
     month: int | None = None,
 ) -> str:
-    """Genera informes NOAA anuales o mensuales en CumulusMX y los guarda en el servidor."""
+    """Genera informes NOAA anuales o mensuales en CumulusMX y los guarda en el servidor.
+    report_type='all' genera todos los informes que falten (sin year/month)."""
     if (err := _check_write_enabled()):
         return err
+    if report_type == "all":
+        return await _get("/api/genreports/all")
     if year is None:
         year = _today().year
     if not (2000 <= year <= 2050):
@@ -1746,7 +1757,7 @@ async def generate_reports(
             raise ValueError(f"month fuera de rango (1..12): {month}")
         return await _get(f"/api/genreports/noaamonth?year={year}&month={month}")
     else:
-        raise ValueError("report_type debe ser 'year' o 'month'")
+        raise ValueError("report_type debe ser 'year', 'month' o 'all'")
 
 
 @write_tool
@@ -1949,7 +1960,7 @@ async def update_alarm_settings(settings: dict[str, Any] | str) -> str:
 
     return await _post(
         "/api/setsettings/updatealarmconfig.json",
-        content=json.dumps(merged),
+        content=urllib.parse.quote(json.dumps(merged)),  # CumulusMX aplica UrlDecode al cuerpo
         headers={"Content-Type": "application/json"},
     )
 
@@ -1977,6 +1988,632 @@ async def test_email(
         "useBcc": use_bcc,
     })
     return await _post("/api/setsettings/testemail.json", content=payload, headers={"Content-Type": "application/json"})
+
+
+# ---------------------------------------------------------------- cobertura completa de la API de CumulusMX ----
+# Nombres, rutas y formatos de cuerpo verificados en el código fuente de CumulusMX 5.2.0 (Api.cs, DataEditor.cs,
+# Settings/*.cs). Las herramientas de escritura se publican solo con ENABLE_WRITE_TOOLS (por defecto true).
+
+FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
+JSON_HEADERS = {"Content-Type": "application/json"}
+
+# sección -> (GET /api/settings/<get>, POST /api/setsettings/<post>, estilo de cuerpo)
+#  "form": cuerpo `json=<JSON codificado>` (el servidor salta los 5 primeros caracteres)
+#  "raw":  JSON codificado sin prefijo (solo alarmas)
+SETTINGS_SECTIONS: dict[str, tuple[str, str, str]] = {
+    "program": ("programdata.json", "updateprogramconfig.json", "form"),
+    "station": ("stationdata.json", "updatestationconfig.json", "form"),
+    "internet": ("internetdata.json", "updateinternetconfig.json", "form"),
+    "thirdparty": ("thirdpartydata.json", "updatethirdpartyconfig.json", "form"),
+    "extrasensors": ("extrasensordata.json", "updateextrasensorconfig.json", "form"),
+    "extrawebfiles": ("extrawebfiles.json", "updateextrawebfiles.json", "form"),
+    "calibration": ("calibrationdata.json", "updatecalibrationconfig.json", "form"),
+    "language": ("langdata.json", "updatelanguage.json", "form"),
+    "noaa": ("noaadata.json", "updatenoaaconfig.json", "form"),
+    "mysql": ("mysqldata.json", "updatemysqlconfig.json", "form"),
+    "alarms": ("alarms.json", "updatealarmconfig.json", "raw"),
+    "useralarms": ("useralarms.json", "updateuseralarms.json", "form"),
+    "wizard": ("wizard.json", "wizard.json", "form"),
+    "customlogs_interval": ("customlogsintvl.json", "updatecustomlogsintvl.json", "form"),
+    "customlogs_daily": ("customlogsdaily.json", "updatecustomlogsdaily.json", "form"),
+    "display": ("displayoptions.json", "updatedisplay.json", "form"),
+    "httpfiles": ("httpfiles.json", "updatehttpfiles.json", "form"),
+    "mqtt": ("mqttdata.json", "updatemqttconfig.json", "form"),
+}
+SettingsSection = Literal[
+    "program", "station", "internet", "thirdparty", "extrasensors", "extrawebfiles", "calibration", "language",
+    "noaa", "mysql", "alarms", "useralarms", "wizard", "customlogs_interval", "customlogs_daily", "display",
+    "httpfiles", "mqtt",
+]
+
+# CUMULUS_MASK_SECRETS=true oculta contraseñas/claves en las lecturas de ajustes (por defecto se devuelven tal cual)
+CUMULUS_MASK_SECRETS = os.environ.get("CUMULUS_MASK_SECRETS", "false").strip().lower() in ("1", "true", "yes", "on")
+SECRET_KEY_RE = re.compile(r"(pass(word)?|pwd|secret|token|api[-_]?key|psk)$", re.IGNORECASE)
+
+
+def _mask_secrets_in(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: ("***" if isinstance(v, str) and v and SECRET_KEY_RE.search(str(k)) else _mask_secrets_in(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_mask_secrets_in(v) for v in obj]
+    return obj
+
+
+def _maybe_mask(text: str) -> str:
+    if not CUMULUS_MASK_SECRETS:
+        return text
+    try:
+        return json.dumps(_mask_secrets_in(json.loads(text)), ensure_ascii=False)
+    except ValueError:
+        return text
+
+
+def _diff_paths(old: Any, new: Any, prefix: str = "") -> dict[str, dict]:
+    """Campos que cambian entre dos estructuras JSON: {ruta: {antes, despues}} (secretos siempre enmascarados)."""
+    out: dict[str, dict] = {}
+    if isinstance(old, dict) and isinstance(new, dict):
+        for k in sorted(set(old) | set(new), key=str):
+            path = f"{prefix}.{k}" if prefix else str(k)
+            if k not in old or k not in new:
+                out[path] = {"antes": old.get(k), "despues": new.get(k)}
+            else:
+                out.update(_diff_paths(old[k], new[k], path))
+    elif old != new:
+        out[prefix] = {"antes": old, "despues": new}
+    if prefix == "":
+        return _mask_secrets_in_diff(out)
+    return out
+
+
+def _mask_secrets_in_diff(diff: dict[str, dict]) -> dict[str, dict]:
+    masked = {}
+    for path, change in diff.items():
+        if SECRET_KEY_RE.search(path.rsplit(".", 1)[-1]):
+            change = {k: ("***" if isinstance(v, str) and v else v) for k, v in change.items()}
+        masked[path] = change
+    return masked
+
+
+def _encode_settings_body(style: str, payload: dict) -> str:
+    encoded = urllib.parse.quote(json.dumps(payload, ensure_ascii=False))
+    return "json=" + encoded if style == "form" else encoded
+
+
+async def _settings_update(section: str, settings: dict[str, Any] | str, dry_run: bool = False,
+                           replace: bool = False) -> str:
+    """Lee la sección actual, fusiona los campos indicados (o la sustituye con replace=True) y la envía con el formato
+    de cuerpo que espera CumulusMX. Si no puede leer la configuración actual NO escribe a ciegas."""
+    if (err := _check_write_enabled()):
+        return err
+    if section not in SETTINGS_SECTIONS:
+        raise ValueError(f"section debe ser una de {sorted(SETTINGS_SECTIONS)}")
+    partial = _normalize_settings_payload(settings)
+    get_path, post_path, style = SETTINGS_SECTIONS[section]
+    current = await _json(f"/api/settings/{get_path}")
+    if not isinstance(current, dict):
+        raise ValueError(f"CumulusMX devolvió una configuración inesperada para '{section}'; no se modifica nada")
+    if replace:
+        merged = partial
+    elif section == "alarms" and not any(k in partial for k in ("data", "units", "email")):
+        section_data = current.get("data") if isinstance(current.get("data"), dict) else {}
+        merged = {**current, "data": _deep_merge(section_data, partial)}
+    else:
+        merged = _deep_merge(current, partial)
+    changes = _diff_paths(current, merged)
+    result: dict[str, Any] = {"seccion": section, "campos_modificados": changes, "modo": "sustitucion" if replace else "fusion"}
+    if dry_run:
+        result["aplicado"] = False
+        result["nota"] = "Vista previa: no se ha enviado nada a CumulusMX."
+        return json.dumps(result, ensure_ascii=False)
+    if not changes:
+        result["aplicado"] = False
+        result["nota"] = "Sin cambios: la configuración ya tiene esos valores."
+        return json.dumps(result, ensure_ascii=False)
+    headers = JSON_HEADERS if style == "raw" else FORM_HEADERS
+    response = await _post(f"/api/setsettings/{post_path}", content=_encode_settings_body(style, merged), headers=headers)
+    result["aplicado"] = True
+    result["respuesta"] = response
+    return json.dumps(result, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_settings(section: SettingsSection) -> str:
+    """Lee cualquier sección de configuración de CumulusMX (misma estructura que acepta update_settings):
+    program, station, internet (FTP/web), thirdparty (Wunderground, etc.), extrasensors, extrawebfiles, calibration,
+    language, noaa, mysql, alarms, useralarms, wizard, customlogs_interval, customlogs_daily, display, httpfiles, mqtt.
+    ATENCIÓN: puede incluir contraseñas y claves (FTP, MySQL, MQTT, SMTP...). Con CUMULUS_MASK_SECRETS=true se enmascaran."""
+    if section not in SETTINGS_SECTIONS:
+        raise ValueError(f"section debe ser una de {sorted(SETTINGS_SECTIONS)}")
+    return _maybe_mask(await _get(f"/api/settings/{SETTINGS_SECTIONS[section][0]}"))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_mysql_settings() -> str:
+    """Configuración MySQL de CumulusMX: server (host, port, user, pass, database, advanced.sslMode/tlsVers), options
+    (updateonedit, bufferonerror), monthly / realtime / dayfile (enabled, table, retención...) y los comandos
+    personalizados (customseconds, customminutes, customrollover, customtimed, customstart). Incluye la contraseña salvo
+    que CUMULUS_MASK_SECRETS=true."""
+    return _maybe_mask(await _get("/api/settings/mysqldata.json"))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_mqtt_settings() -> str:
+    """Configuración MQTT de CumulusMX: servidor, puerto, credenciales, TLS, publicación de datos en tiempo real y a
+    intervalos (plantillas y topics). Incluye la contraseña salvo que CUMULUS_MASK_SECRETS=true."""
+    return _maybe_mask(await _get("/api/settings/mqttdata.json"))
+
+
+@write_tool
+async def update_settings(section: SettingsSection, settings: dict[str, Any] | str, dry_run: bool = False,
+                          replace: bool = False) -> str:
+    """Modifica CUALQUIER sección de configuración de CumulusMX. Lee la configuración actual, fusiona en profundidad
+    solo los campos que indicas (replace=True envía `settings` tal cual, sustituyendo la sección) y la envía con el formato
+    que exige cada endpoint. Devuelve los campos modificados (antes/después; secretos enmascarados).
+    dry_run=True solo muestra los cambios sin aplicarlos: úsalo para confirmar con el usuario antes de escribir.
+    Obtén la estructura con get_settings(section). Si no se puede leer la configuración actual no se escribe nada.
+    Algunos cambios requieren reiniciar CumulusMX para tener efecto."""
+    return await _settings_update(section, settings, dry_run, replace)
+
+
+@write_tool
+async def update_mysql_settings(settings: dict[str, Any] | str, dry_run: bool = False) -> str:
+    """Modifica la configuración MySQL (fusión parcial). Ejemplo: {"server": {"host": "db", "port": 3306, "user": "u",
+    "pass": "p", "database": "cumulus"}, "monthly": {"enabled": true, "table": "Monthly"}, "dayfile": {"enabled": true},
+    "realtime": {"enabled": false}}. Tras activar tablas usa mysql_table(action='create', ...). dry_run=True = vista previa."""
+    return await _settings_update("mysql", settings, dry_run)
+
+
+@write_tool
+async def update_mqtt_settings(settings: dict[str, Any] | str, dry_run: bool = False) -> str:
+    """Modifica la configuración MQTT (fusión parcial). Parte de get_mqtt_settings para ver la estructura exacta
+    (server, port, username, password, TLS, topics y plantillas). dry_run=True = vista previa."""
+    return await _settings_update("mqtt", settings, dry_run)
+
+
+@write_tool
+async def update_noaa_settings(settings: dict[str, Any] | str, dry_run: bool = False) -> str:
+    """Modifica la configuración de informes NOAA (nombre del sitio, ciudad, formatos de fichero, umbrales de calor/frío,
+    subida...). Fusión parcial a partir de get_noaa_settings. dry_run=True = vista previa."""
+    return await _settings_update("noaa", settings, dry_run)
+
+
+@write_tool
+async def mysql_table(action: Literal["create", "update"], table: Literal["monthly", "dayfile", "realtime"]) -> str:
+    """Crea (create) o actualiza la estructura (update) de las tablas MySQL de CumulusMX: monthly, dayfile o realtime.
+    Úsalo después de configurar la conexión con update_mysql_settings."""
+    if action not in ("create", "update") or table not in ("monthly", "dayfile", "realtime"):
+        raise ValueError("action: create|update; table: monthly|dayfile|realtime")
+    if (err := _check_write_enabled()):
+        return err
+    return await _post(f"/api/setsettings/{action}{table}sql.json")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def mysql_cache(start: int = 0, length: int = 100, search: str = "") -> str:
+    """Comandos SQL pendientes en la caché de reintentos de MySQL (fallos de conexión). Paginado (length máx 500).
+    Requiere las credenciales de CumulusMX si la API está protegida (CUMULUS_USER / CUMULUS_PASSWORD)."""
+    return await _get("/api/data/mysqlcache.json", {"draw": 1, "start": max(0, start),
+                                                    "length": max(1, min(length, 500)), "search[value]": search[:100]})
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def diary_export() -> str:
+    """Exporta todo el diario meteorológico en CSV (texto)."""
+    return await _get("/api/data/diaryexport.txt")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_current_conditions_text() -> str:
+    """Texto de 'condiciones actuales' que CumulusMX publica (el que cambia edit_current_conditions)."""
+    return await _get("/api/edit/currentcond.json")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def records_edit_data(scope: Literal["alltime", "monthly", "thismonth", "thisyear"],
+                            source: Literal["records", "dayfile", "logfile"] = "records") -> str:
+    """Datos de la pantalla de edición de récords de CumulusMX. source='records': valores de récord actuales (editables con
+    edit_records); 'dayfile': candidatos calculados desde el dayfile; 'logfile': desde los logs de intervalo (más lento)."""
+    suffix = {"records": "", "dayfile": "dayfile", "logfile": "logfile"}[source]
+    return await _get(f"/api/edit/{scope}records{suffix}.json")
+
+
+# ---- datos por intervalo / diarios con selección de campos (intervaldata / dailydata)
+
+LOG_FILE_FIELDS = [
+    "DateTime", "TS", "Temperature", "Humidity", "DewPoint", "WindSpeed", "RecentHighGust", "AverageWindBearing",
+    "RainfallRate", "RainfallSoFar", "SeaLevelPressure", "RainfallCounter", "InsideTemperature", "InsideHumidity",
+    "CurrentGust", "WindChill", "HeatIndex", "UvIndex", "SolarRadiation", "Evapotranspiration",
+    "AnnualEvapotranspiration", "ApparentTemperature", "MaxSolarRadiation", "HoursOfSunshine", "WindBearing",
+    "Rg-11Rain", "RainSinceMidnight", "FeelsLike", "Humidex", "BGT", "WBGT",
+]
+EXTRA_LOG_FIELDS = [
+    "DateTime", "TS",
+    *[f"Temp{i}" for i in range(1, 11)], *[f"Hum{i}" for i in range(1, 11)], *[f"Dewpoint{i}" for i in range(1, 11)],
+    "SoilTemp1", "SoilTemp2", "SoilTemp3", "SoilTemp4", "SoilMoist1", "SoilMoist2", "SoilMoist3", "SoilMoist4",
+    "na1", "na2", "LeafWet1", "LeafWet2",
+    *[f"SoilTemp{i}" for i in range(5, 17)], *[f"SoilMoist{i}" for i in range(5, 17)],
+    "AQ1Pm", "AQ2Pm", "AQ3Pm", "AQ4Pm", "AQ1PmAvg", "AQ2PmAvg", "AQ3PmAvg", "AQ4PmAvg",
+    *[f"UserTemp{i}" for i in range(1, 9)],
+    "CO2", "CO2Avg", "CO2Pm25", "CO2Pm25Avg", "CO2Pm10", "CO2Pm10Avg", "CO2Temp", "CO2Hum",
+    "LaserDist1", "LaserDist2", "LaserDist3", "LaserDist4", "Snow24h",
+    *[f"Temp{i}" for i in range(11, 17)], *[f"Hum{i}" for i in range(11, 17)], *[f"Dewpoint{i}" for i in range(11, 17)],
+    "AQ1Pm10", "AQ2Pm10", "AQ3Pm10", "AQ4Pm10", *[f"SoilEC{i}" for i in range(1, 17)],
+]
+DAYFILE_FIELD_NAMES = [
+    "Date", "HighWindGust", "HighGustBearing", "HighGustTime", "MinTemperature", "MinTempTime", "MaxTemperature",
+    "MaxTempTime", "MinPressure", "MinPressureTime", "MaxPressure", "MaxPressureTime", "MaxRainfallRate",
+    "MaxRainRateTime", "TotalRainfallToday", "AvgTemperatureToday", "TotalWindRun", "HighAverageWindSpeed",
+    "HighAvgWindSpeedTime", "LowHumidity", "LowHumidityTime", "HighHumidity", "HighHumidityTime",
+    "TotalEvapotranspiration", "TotalHoursOfSunshine", "HighHeatIndex", "HighHeatIndexTime", "HighApparentTemperature",
+    "HighAppTempTime", "LowApparentTemperature", "LowAppTempTime", "High1hRain", "High1hRainTime", "LowWindChill",
+    "LowWindChillTime", "HighDewPoint", "HighDewPointTime", "LowDewPoint", "LowDewPointTime", "DominantWindBearing",
+    "HeatingDegreeDays", "CoolingDegreeDays", "HighSolarRad", "HighSolarRadTime", "HighUv-I", "HighUv-ITime",
+    "HighFeelsLike", "HighFeelsLikeTime", "LowFeelsLike", "LowFeelsLikeTime", "HighHumidex", "HighHumidexTime",
+    "ChillHours", "High24hRain", "High24hRainTime", "HighBgt", "HighBgtTime", "HighWbgt", "HighWbgtTime",
+]
+CUMULUS_TIMEZONE = os.environ.get("CUMULUS_TIMEZONE", "").strip()
+
+
+def _field_indices(fields: list[str], kind: str) -> list[int]:
+    """Nombres (o índices numéricos) -> índices de campo de CumulusMX. En 'interval' los campos del log de sensores
+    extra suman 1000, como espera la API."""
+    if not fields:
+        raise ValueError("fields no puede estar vacío")
+    lookup: dict[str, int] = {}
+    if kind == "interval":
+        for i, n in enumerate(EXTRA_LOG_FIELDS):
+            lookup.setdefault(n.lower(), 1000 + i)
+        for i, n in enumerate(LOG_FILE_FIELDS):
+            lookup[n.lower()] = i  # el log principal prevalece si un nombre existe en ambos
+    else:
+        for i, n in enumerate(DAYFILE_FIELD_NAMES):
+            lookup[n.lower()] = i
+    out: list[int] = []
+    for f in fields:
+        key = str(f).strip().lower()
+        if key.isdigit():
+            out.append(int(key))
+        elif key in lookup:
+            out.append(lookup[key])
+        else:
+            raise ValueError(f"campo desconocido '{f}'. Válidos: {sorted({n for n in lookup})[:60]}...")
+    return out
+
+
+def _to_epoch(value: str, end_of_day: bool = False) -> int:
+    """Segundos Unix tal cual, o una fecha/hora de la estación ('yyyy-mm-dd' / 'yyyy-mm-dd HH:MM') convertida con
+    CUMULUS_TIMEZONE (zona IANA de la estación, p. ej. Europe/Madrid)."""
+    v = str(value).strip()
+    if re.fullmatch(r"\d{9,11}", v):
+        return int(v)
+    if not CUMULUS_TIMEZONE:
+        raise ValueError("Para usar fechas legibles define CUMULUS_TIMEZONE (zona IANA de la estación, p. ej. "
+                         "Europe/Madrid) o pasa segundos Unix.")
+    import zoneinfo
+    if DATE_RE.match(v):
+        fmt = "%Y-%m-%d %H:%M" if " " in v else "%Y-%m-%d"
+    else:
+        raise ValueError(f"fecha inválida '{value}': usa yyyy-mm-dd, 'yyyy-mm-dd HH:MM' o segundos Unix")
+    dt = datetime.datetime.strptime(v, fmt)
+    if end_of_day and fmt == "%Y-%m-%d":
+        dt = dt.replace(hour=23, minute=59, second=59)
+    return int(dt.replace(tzinfo=zoneinfo.ZoneInfo(CUMULUS_TIMEZONE)).timestamp())
+
+
+_NUM_CELL_RE = re.compile(r"^-?\d+([.,]\d+)?$")
+
+
+def _parse_table(raw: str, max_rows: int) -> dict[str, Any] | str:
+    """Respuesta de intervaldata/dailydata ([["Date/Time", nombres...], [fecha, valores...], ...]) -> campos + filas con
+    números reales (acepta coma decimal regional). Si no tiene el formato esperado devuelve el texto original."""
+    try:
+        rows = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], list):
+        return raw
+
+    def cell(c: Any) -> Any:
+        if isinstance(c, str) and _NUM_CELL_RE.match(c):
+            f = float(c.replace(",", "."))
+            return int(f) if re.fullmatch(r"-?\d+", c) else f
+        return c
+
+    body = [[r[0], *[cell(c) for c in r[1:]]] for r in rows[1:] if isinstance(r, list) and r]
+    return {"campos": rows[0][1:], "n_filas": len(body), "filas": body[:max_rows], "truncado": len(body) > max_rows}
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def interval_data(start: str, end: str, fields: list[str], max_rows: int = 500) -> str:
+    """Datos de los logs de intervalo (cada pocos minutos) de un rango, con SOLO los campos que pidas (sin paginar).
+    fields: nombres del log principal (Temperature, Humidity, DewPoint, WindSpeed, RecentHighGust, RainfallRate,
+    SeaLevelPressure, UvIndex, SolarRadiation, FeelsLike, Humidex, BGT...) o del log de sensores extra (Temp1, SoilTemp1,
+    SoilMoist1, LeafWet1, CO2, ...), o índices numéricos. start/end: segundos Unix, o 'yyyy-mm-dd' / 'yyyy-mm-dd HH:MM' si
+    el servidor tiene CUMULUS_TIMEZONE (zona horaria de la estación). Devuelve campos y filas con números reales."""
+    s, e = _to_epoch(start), _to_epoch(end, end_of_day=True)
+    if e < s:
+        raise ValueError("end anterior a start")
+    idx = ",".join(str(i) for i in _field_indices(fields, "interval"))
+    raw = await _get("/api/data/intervaldata.json", {"from": s, "to": e, "data": idx})
+    out = _parse_table(raw, max(1, min(max_rows, 2000)))
+    return raw if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def daily_data(start: str, end: str, fields: list[str], max_rows: int = 500) -> str:
+    """Datos diarios (dayfile) de un rango con SOLO los campos oficiales de CumulusMX que pidas (nombres como
+    MaxTemperature, MinTemperature, TotalRainfallToday, HighWindGust, TotalHoursOfSunshine, HighBgt... o índices).
+    Alternativa a dayfile_range con los nombres originales; mismas reglas de fecha que interval_data."""
+    s, e = _to_epoch(start), _to_epoch(end, end_of_day=True)
+    if e < s:
+        raise ValueError("end anterior a start")
+    idx = ",".join(str(i) for i in _field_indices(fields, "daily"))
+    raw = await _get("/api/data/dailydata.json", {"from": s, "to": e, "data": idx})
+    out = _parse_table(raw, max(1, min(max_rows, 2000)))
+    return raw if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+
+
+# ---- consultas y gráficas personalizadas
+
+QUERY_PROPERTIES = (
+    "HighGust", "WindRun", "HighAvgWind", "LowTemp", "HighTemp", "AvgTemp", "HighHeatIndex", "HighAppTemp",
+    "LowAppTemp", "LowWindChill", "HighDewPoint", "LowDewPoint", "HighFeelsLike", "LowFeelsLike", "HighHumidex",
+    "LowPress", "HighPress", "HighRainRate", "TotalRain", "HighHourlyRain", "HighRain24h", "LowHumidity",
+    "HighHumidity", "SunShineHours", "HighSolar", "HighUv", "ET", "HeatingDegreeDays", "CoolingDegreeDays",
+    "ChillHours", "HighBgt", "HighWbgt",
+)
+QUERY_FUNCTIONS = ("min", "max", "sum", "avg", "count")
+QUERY_OPERATORS = (">", "<", ">=", "<=", "=", "<>")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def records_query(dataname: str, function: Literal["min", "max", "sum", "avg", "count"], period: str = "ThisYear",
+                        start: str = "", end: str = "", where: Literal[">", "<", ">=", "<=", "=", "<>"] | None = None,
+                        value: float = 0.0, countfunction: Literal["min", "max", "sum", "avg", "count"] | None = None) -> str:
+    """Consulta del dayfile ejecutada por el propio CumulusMX (misma función que 'Consultas' de su web). dataname:
+    HighTemp, LowTemp, AvgTemp, TotalRain, HighGust, WindRun, HighAvgWind, HighHeatIndex, HighAppTemp, LowAppTemp,
+    LowWindChill, HighDewPoint, LowDewPoint, HighFeelsLike, LowFeelsLike, HighHumidex, LowPress, HighPress, HighRainRate,
+    HighHourlyRain, HighRain24h, LowHumidity, HighHumidity, SunShineHours, HighSolar, HighUv, ET, HeatingDegreeDays,
+    CoolingDegreeDays, ChillHours, HighBgt, HighWbgt. function: min|max|sum|avg|count. period: 'ThisYear', 'ThisMonth',
+    'ThisDay', 'Year-N', 'Month-N', 'Day-N' (N periodos atrás) o 'User' con start/end (formato de CumulusMX, p. ej.
+    dd/MM/yyyy). where+value filtran días (p. ej. where='>=' value=30 con function='count'). Devuelve {value, time}."""
+    if dataname not in QUERY_PROPERTIES:
+        raise ValueError(f"dataname debe ser uno de {list(QUERY_PROPERTIES)}")
+    if function not in QUERY_FUNCTIONS or (countfunction is not None and countfunction not in QUERY_FUNCTIONS):
+        raise ValueError(f"function/countfunction deben ser uno de {list(QUERY_FUNCTIONS)}")
+    if where is not None and where not in QUERY_OPERATORS:
+        raise ValueError(f"where debe ser uno de {list(QUERY_OPERATORS)}")
+    if not re.fullmatch(r"[A-Za-z]{3,10}(-?\d{1,4})?", period):
+        raise ValueError("period inválido (ThisYear, ThisMonth, ThisDay, Year-N, Month-N, Day-N o User)")
+    if period == "User" and not (start and end):
+        raise ValueError("period='User' requiere start y end")
+    body = {"dataname": dataname, "function": function, "where": where, "value": value, "startsel": period,
+            "start": start or None, "end": end or None, "countfunction": countfunction}
+    return await _post("/api/records/query/dayfile.json", content="json=" + urllib.parse.quote(json.dumps(body)),
+                       headers=FORM_HEADERS)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def graph_select(kind: Literal["chart", "period"], series: list[str], from_date: str, to_date: str,
+                       colours: list[str] | None = None) -> str:
+    """Gráfica personalizada de CumulusMX ('Select-a-Chart' y 'Select-a-Period'): devuelve las series pedidas entre dos
+    fechas. series: nombres de series disponibles (consúltalos con graph_data('availabledata')). from_date/to_date:
+    yyyy-mm-dd. colours: opcional (colores hexadecimales, uno por serie)."""
+    if not series:
+        raise ValueError("series no puede estar vacío")
+    for d, n in ((from_date, "from_date"), (to_date, "to_date")):
+        _check_date(d, n)
+    payload = {"series": series, "colours": colours or ["#000000"] * len(series), "fromDate": from_date, "toDate": to_date}
+    path = "selectachart" if kind == "chart" else "selectaperiod"
+    return await _post(f"/api/graphdata/{path}.json", content=urllib.parse.quote(json.dumps(payload)), headers=FORM_HEADERS)
+
+
+# ---- tiempo real (WebSocket)
+
+@mcp.tool(annotations=READ_ONLY)
+async def live_sample(seconds: float = 10.0, max_messages: int = 3) -> str:
+    """Escucha el WebSocket de tiempo real de CumulusMX (/ws/) y devuelve los primeros mensajes (el primero llega al
+    conectar; los siguientes en cada actualización de la estación, normalmente cada pocos segundos). Cada mensaje es el
+    mismo JSON que current_data. seconds máx 60, max_messages máx 20."""
+    seconds = max(1.0, min(float(seconds), 60.0))
+    max_messages = max(1, min(int(max_messages), 20))
+    try:
+        import websockets
+    except ImportError:  # pragma: no cover
+        raise ValueError("Falta la librería 'websockets' (pip install websockets)")
+    url = BASE.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + "/ws/"
+    headers = {}
+    if (auth := _get_auth()):
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+    messages: list[Any] = []
+
+    async def collect() -> None:
+        async with websockets.connect(url, additional_headers=headers or None, open_timeout=10) as ws:
+            while len(messages) < max_messages:
+                raw = await ws.recv()
+                try:
+                    messages.append(json.loads(raw))
+                except (TypeError, ValueError):
+                    messages.append(raw)
+
+    try:
+        await asyncio.wait_for(collect(), timeout=seconds)
+        timed_out = False
+    except asyncio.TimeoutError:
+        timed_out = True
+    except Exception as e:  # conexión rechazada, 403, etc.
+        if not messages:
+            return json.dumps({"error": f"No se pudo leer el WebSocket {url}: {type(e).__name__}: {e}"}, ensure_ascii=False)
+        timed_out = False
+    return json.dumps({"url": url, "n_mensajes": len(messages), "tiempo_agotado": timed_out, "mensajes": messages},
+                      ensure_ascii=False)
+
+
+# ---- edición de datos históricos (DataEditor) y diario
+
+def _editor_payload(action: str, lines: list[int] | None = None, data: list[list[str]] | None = None, **extra: Any) -> str:
+    if action not in ("Edit", "Delete"):
+        raise ValueError("action debe ser 'Edit' o 'Delete'")
+    body: dict[str, Any] = {"action": action}
+    if lines is not None:
+        body["lines"] = lines
+    if data is not None:
+        body["data"] = data
+    body.update(extra)
+    return json.dumps(body, ensure_ascii=False)
+
+
+@write_tool
+async def edit_dayfile(action: Literal["Edit", "Delete"], line: int, values: list[str]) -> str:
+    """Edita o borra UNA línea del dayfile.txt (corrección de datos históricos). line: número de línea (1 = primera; es el
+    primer valor que devuelve la tool dayfile). values: los campos de esa línea tal como aparecen en dayfile.txt (fecha
+    dd/MM/yy primero, sin el número de línea). CumulusMX comprueba que la fecha coincide con la de la línea indicada.
+    Actualiza también SQLite y, si está activado 'update on edit', MySQL. HAZ COPIA DE SEGURIDAD antes de editar."""
+    if line < 1 or not values:
+        raise ValueError("line debe ser >= 1 y values no puede estar vacío")
+    if (err := _check_write_enabled()):
+        return err
+    _cached_dayfile_by_year.clear()
+    return await _post("/api/edit/dayfile", content=_editor_payload(action, [line], [[str(v) for v in values]]),
+                       headers=JSON_HEADERS)
+
+
+@write_tool
+async def edit_datalog(action: Literal["Edit", "Delete"], line: int, values: list[str], extra: bool = False) -> str:
+    """Edita o borra una línea de un log mensual de intervalo (extra=True: log de sensores extra). El fichero se deduce del
+    segundo campo (TS, segundos Unix) de values; line es la línea dentro de ese fichero (1 = primera). values: todos los
+    campos de la línea del log. CumulusMX comprueba que el TS coincide con el de la línea. HAZ COPIA DE SEGURIDAD."""
+    if line < 1 or not values:
+        raise ValueError("line debe ser >= 1 y values no puede estar vacío")
+    if (err := _check_write_enabled()):
+        return err
+    return await _post("/api/edit/datalogs", content=_editor_payload(action, [line], [[str(v) for v in values]], extra=extra),
+                       headers=JSON_HEADERS)
+
+
+@write_tool
+async def edit_recent_data(action: Literal["Edit", "Delete"], values: list[str]) -> str:
+    """Edita o borra un registro de la tabla de datos recientes (SQLite) de CumulusMX. values: los campos del registro en
+    el orden CSV de la tabla (consúltalo con recent_data)."""
+    if not values:
+        raise ValueError("values no puede estar vacío")
+    if (err := _check_write_enabled()):
+        return err
+    return await _post("/api/edit/recentdata", content=_editor_payload(action, data=[[str(v) for v in values]]),
+                       headers=JSON_HEADERS)
+
+
+@write_tool
+async def edit_mysql_cache(action: Literal["Edit", "Delete"], keys: list[int], statements: list[str] | None = None) -> str:
+    """Edita o borra comandos SQL pendientes en la caché de reintentos de MySQL (ver mysql_cache). keys: claves de los
+    comandos; statements: nuevo SQL (solo para Edit, uno por clave)."""
+    if not keys:
+        raise ValueError("keys no puede estar vacío")
+    if action == "Edit" and (not statements or len(statements) != len(keys)):
+        raise ValueError("Edit requiere un statement por cada clave")
+    if (err := _check_write_enabled()):
+        return err
+    extra: dict[str, Any] = {"keys": keys}
+    if statements is not None:
+        extra["statements"] = statements
+    return await _post("/api/edit/mysqlcache", content=_editor_payload(action, **extra), headers=JSON_HEADERS)
+
+
+RECORD_FIELDS_COMMON = (
+    "highTemp", "lowTemp", "highDewPoint", "lowDewPoint", "highApparentTemp", "lowApparentTemp", "highFeelsLike",
+    "lowFeelsLike", "highHumidex", "lowWindChill", "highHeatIndex", "highMinTemp", "lowMaxTemp", "highDailyTempRange",
+    "lowDailyTempRange", "highHumidity", "lowHumidity", "highBarometer", "lowBarometer", "highGust", "highWind",
+    "highWindRun", "highRainRate", "highHourlyRain", "highDailyRain", "highRain24h", "highMonthlyRain",
+    "longestDryPeriod", "longestWetPeriod", "highBgt", "highWbgt",
+)
+RECORD_EDIT_FIELDS: dict[str, tuple[str, ...]] = {
+    "alltime": RECORD_FIELDS_COMMON,
+    "monthly": RECORD_FIELDS_COMMON,
+    "thisyear": RECORD_FIELDS_COMMON,
+    "thismonth": tuple(f for f in RECORD_FIELDS_COMMON if f != "highMonthlyRain"),
+}
+
+
+async def _station_decimal_separator() -> str:
+    """Separador decimal que usa la estación (CumulusMX parsea los valores editados con su cultura regional)."""
+    text = await _get("/api/tags/process.json?temp")
+    m = re.search(r'"temp":"-?\d+([.,])\d', text)
+    return m.group(1) if m else "."
+
+
+@write_tool
+async def edit_records(scope: Literal["alltime", "monthly", "thismonth", "thisyear"], field: str, value: float, time: str,
+                       month: int | None = None) -> str:
+    """Corrige un récord de la estación. scope: alltime | monthly (requiere month 1-12) | thismonth | thisyear. field:
+    highTemp, lowTemp, highDewPoint, lowDewPoint, highApparentTemp, lowApparentTemp, highFeelsLike, lowFeelsLike,
+    highHumidex, lowWindChill, highHeatIndex, highMinTemp, lowMaxTemp, highDailyTempRange, lowDailyTempRange,
+    highHumidity, lowHumidity, highBarometer, lowBarometer, highGust, highWind, highWindRun, highRainRate,
+    highHourlyRain, highDailyRain, highRain24h, highMonthlyRain (no en thismonth), longestDryPeriod, longestWetPeriod,
+    highBgt, highWbgt. time: 'dd/MM/yyyy HH:mm' (récords con hora), 'dd/MM/yyyy' (récords diarios) o 'MMM yyyy' (lluvia
+    mensual), en el formato regional del servidor. El valor se envía con el separador decimal de la estación."""
+    if scope not in RECORD_EDIT_FIELDS:
+        raise ValueError(f"scope debe ser uno de {sorted(RECORD_EDIT_FIELDS)}")
+    if field not in RECORD_EDIT_FIELDS[scope]:
+        raise ValueError(f"field '{field}' no válido para {scope}. Válidos: {list(RECORD_EDIT_FIELDS[scope])}")
+    if scope == "monthly" and not (month and 1 <= month <= 12):
+        raise ValueError("scope='monthly' requiere month entre 1 y 12")
+    if (err := _check_write_enabled()):
+        return err
+    sep = await _station_decimal_separator()
+    name = f"{month}-{field}" if scope == "monthly" else field
+    body = f"name={name}&value={str(value).replace('.', sep)}&time={urllib.parse.quote_plus(time)}"
+    return await _post(f"/api/edit/{scope}", content=body, headers=FORM_HEADERS)
+
+
+@write_tool
+async def diary_upload(csv_content: str) -> str:
+    """Importa entradas al diario meteorológico desde texto CSV: la primera línea es la cabecera (se ignora) y cada línea
+    siguiente un registro, con el mismo formato que devuelve diary_export."""
+    if not csv_content or "\n" not in csv_content.strip():
+        raise ValueError("csv_content debe incluir la cabecera y al menos un registro")
+    if (err := _check_write_enabled()):
+        return err
+    return await _post("/api/edit/diaryupload", content=csv_content, headers={"Content-Type": "text/plain; charset=utf-8"})
+
+
+@write_tool
+async def diary_automate(sensor: int) -> str:
+    """Configura qué sensor láser de nieve rellena automáticamente el diario (1-4). 0 desactiva la automatización."""
+    if not 0 <= sensor <= 4:
+        raise ValueError("sensor debe estar entre 0 y 4")
+    if (err := _check_write_enabled()):
+        return err
+    return await _post("/api/edit/diaryautomate", content=str(sensor), headers={"Content-Type": "text/plain"})
+
+
+# ---- entrada de datos de estaciones HTTP (Ecowitt, Wunderground, Ambient, JSON)
+
+STATION_INPUT_PROTOCOLS: dict[str, tuple[str, ...]] = {
+    "ecowitt": ("GET", "POST"), "ecowittextra": ("GET", "POST"), "json": ("POST",), "jsonextra": ("POST",),
+    "wunderground": ("GET",), "ambient": ("GET",), "ambientextra": ("GET",),
+}
+
+
+@write_tool
+async def station_input(protocol: Literal["ecowitt", "ecowittextra", "json", "jsonextra", "wunderground", "ambient",
+                                          "ambientextra"],
+                        method: Literal["GET", "POST"] = "POST", body: str = "", query: dict[str, str] | None = None,
+                        content_type: str = "application/x-www-form-urlencoded") -> str:
+    """Envía una lectura a la entrada HTTP de CumulusMX, como haría una estación o consola (/station/<protocolo>): útil para
+    probar y depurar la configuración de una estación 'HTTP Ecowitt', 'HTTP Ambient' o 'JSON'. POST: ecowitt, ecowittextra,
+    json, jsonextra (cuerpo en body). GET: ecowitt, ecowittextra, wunderground, ambient, ambientextra (parámetros en
+    query). Falla con 503 si la estación configurada no es de ese tipo. CAUTELA: los datos enviados se registran como
+    observaciones reales."""
+    allowed = STATION_INPUT_PROTOCOLS.get(protocol)
+    if allowed is None or method not in allowed:
+        raise ValueError(f"{protocol} admite {STATION_INPUT_PROTOCOLS.get(protocol)}")
+    if (err := _check_write_enabled()):
+        return err
+    path = f"/station/{protocol}"
+    if method == "GET":
+        return await _get(path, {str(k)[:60]: str(v)[:300] for k, v in (query or {}).items()} or None)
+    return await _post(path, content=body, headers={"Content-Type": content_type})
 
 
 # ---------------------------------------------------------------- resources ----

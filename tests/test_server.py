@@ -16,6 +16,7 @@ import math
 import os
 import py_compile
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1188,7 +1189,7 @@ class TestSettingsTools:
             res = await server.update_alarm_settings({"tempBelow": {"enabled": True}})
             assert res == "success"
             call_kwargs = mock_post.call_args[1]
-            payload = json.loads(call_kwargs["content"])
+            payload = json.loads(urllib.parse.unquote(call_kwargs["content"]))
             assert payload["data"]["tempBelow"]["enabled"] is True
 
     @pytest.mark.asyncio
@@ -1199,7 +1200,7 @@ class TestSettingsTools:
             res = await server.test_email("station@example.com", "admin@example.com", use_html=True)
             assert res == "Test email sent without error"
             call_kwargs = mock_post.call_args[1]
-            payload = json.loads(call_kwargs["content"])
+            payload = json.loads(urllib.parse.unquote(call_kwargs["content"]))
             assert payload["fromEmail"] == "station@example.com"
             assert payload["destEmail"] == "admin@example.com"
             assert payload["useHtml"] is True
@@ -1244,7 +1245,7 @@ class TestToolRegistration:
     async def test_tool_annotations_for_claude_permissions(self):
         """Verifica que todas las herramientas tienen anotaciones de solo lectura o destructivas."""
         tools = await server.mcp.list_tools()
-        assert len(tools) == 58
+        assert len(tools) == 83
         read_count = 0
         write_count = 0
         for t in tools:
@@ -1256,8 +1257,8 @@ class TestToolRegistration:
             else:
                 write_count += 1
                 assert t.annotations.destructive_hint is True
-        assert read_count == 43
-        assert write_count == 15
+        assert read_count == 55
+        assert write_count == 28
 
 
 class TestCheckCumulusConnection:
