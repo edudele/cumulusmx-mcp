@@ -530,12 +530,11 @@ class TestDataEditors:
             await server.edit_recent_data("Edit", ["a", 1, 2.5])
             assert p.await_args.args[0] == "/api/edit/recentdata"
             assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "data": [["a", "1", "2.5"]]}
-            await server.edit_mysql_cache("Edit", [7, 8], ["INSERT 1", "INSERT 2"])
+            await server.edit_mysql_cache("Edit", [7], ["INSERT 1"])
             assert p.await_args.args[0] == "/api/edit/mysqlcache"
-            assert json.loads(p.await_args.kwargs["content"]) == {
-                "action": "Edit", "keys": [7, 8], "statements": ["INSERT 1", "INSERT 2"]}
-            await server.edit_mysql_cache("Delete", [7])
-            assert json.loads(p.await_args.kwargs["content"]) == {"action": "Delete", "keys": [7]}
+            assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "keys": [7], "statements": ["INSERT 1"]}
+            await server.edit_mysql_cache("Delete", [7], ["INSERT 1"])
+            assert json.loads(p.await_args.kwargs["content"]) == {"action": "Delete", "keys": [7], "statements": ["INSERT 1"]}
 
     @pytest.mark.asyncio
     async def test_editor_validations(self):
@@ -551,8 +550,10 @@ class TestDataEditors:
             await server.edit_recent_data("Edit", [])
         with pytest.raises(ValueError):
             await server.edit_mysql_cache("Edit", [], None)
-        with pytest.raises(ValueError, match="un statement por cada clave"):
+        with pytest.raises(ValueError, match="exactamente 1 clave"):
             await server.edit_mysql_cache("Edit", [1, 2], ["solo uno"])
+        with pytest.raises(ValueError, match="un statement por cada clave"):
+            await server.edit_mysql_cache("Delete", [1, 2], ["solo uno"])
 
     @pytest.mark.asyncio
     async def test_all_editors_respect_the_write_guard(self, monkeypatch):

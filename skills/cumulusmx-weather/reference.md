@@ -40,7 +40,7 @@ Parameter notes for the 89 tools of cumulusmx-mcp. Tool names are in backticks i
 | `live_sample` | `seconds` (max 60), `max_messages` (max 20). Messages from the `/ws/` WebSocket, same JSON as `current_data`. Reports an `error` field if the socket cannot be opened. |
 | `weather_alerts` | Optional `thresholds` (`frost_temp` 3, `wind_gust` 60, `rain_rate` 20, `heat_index` 35, `uv` 8, `pressure_drop_3h` -3, `humidity_low` 20; station units). Returns `hay_alertas`, `alertas` (`tipo`, `nivel` alerta > aviso > info, `mensaje`, `valor`, `umbral`), the conditions used and `avisos` (for example when the station is not metric). |
 | `period_report` | `period` (`week` = 7 days ending at `ref_date`, `month` = day 1 to `ref_date`, `year` = 1 January to `ref_date`), `ref_date` (default: last day with data). Returns Markdown: temperature, rain and streaks, wind, pressure, sun, comparison with the station's normals, missing-data note. |
-| `list_backups` | `kind` (`settings`, `dayfile`, `records` or empty), `limit`. Metadata only: `id`, `creada`, `tipo`, `objetivo`, `herramienta`. |
+| `list_backups` | `kind` (`settings`, `dayfile`, `datalog`, `recent`, `mysqlcache`, `records` or empty), `limit`. Metadata only: `id`, `creada`, `tipo`, `objetivo`, `herramienta`. |
 | `get_backup` | `backup_id`. Full content (passwords masked with `CUMULUS_MASK_SECRETS` or the read-only token). |
 | `get_audit_log` | `limit`, `tool`. Recent writes: tool, token scope (`full` / `readonly`), arguments without secrets, result (`ok`, `fallo`, `denegado`, `error`). |
 | `monthly_summary` | `year` (2000-2050). One aggregate per month that has data. |
@@ -134,9 +134,9 @@ and change nothing.
 
 | Tool | Effect |
 |---|---|
-| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup) or a day-file line. Records backups are informational: fix them with `edit_records`. The restore creates its own backup, so it can be undone too. |
+| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup), a day-file or interval-log line, a recent-data record, a MySQL-cache statement or a record (previous value and time), as long as the original write was an *Edit*. A *Delete* cannot be re-inserted (CumulusMX has no such action): `get_backup` shows what was lost. The restore creates its own backup, so it can be undone too. |
 
-`edit_dayfile` and `edit_records` return JSON with `respuesta` (CumulusMX's answer) and `copia_id`.
+`edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_mysql_cache` and `edit_records` return JSON with `respuesta` (CumulusMX's answer) and `copia_id`. `edit_mysql_cache` Edit takes exactly one key and one statement; Delete reads the statements from the cache itself.
 
 ### Diary and device input
 

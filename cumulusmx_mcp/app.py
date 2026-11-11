@@ -4,6 +4,7 @@ import hmac
 import inspect
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware import Middleware as ToolMiddleware
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -81,7 +82,30 @@ runs with ENABLE_WRITE_TOOLS=false.
 """
 
 
+class ReadOnlyToolFilter(ToolMiddleware):
+    """Con el token de solo lectura, tools/list no incluye las tools que modifican la estación (el cliente ni las ve).
+
+    La guarda de `write_tool` sigue denegando su ejecución: esto solo evita ofrecerlas."""
+
+    @staticmethod
+    def _writes(tool) -> bool:
+        ann = tool.annotations
+        if ann is None:
+            return False
+        read_only = getattr(ann, "read_only_hint", None)       # FastMCP 4: snake_case; 3.x: camelCase
+        if read_only is None:
+            read_only = getattr(ann, "readOnlyHint", None)
+        return read_only is False
+
+    async def on_list_tools(self, context, call_next):
+        tools = await call_next(context)
+        if safety.current_scope() == "full":
+            return tools
+        return [t for t in tools if not self._writes(t)]
+
+
 mcp = FastMCP("cumulusmx-mcp", version=__version__, instructions=SERVER_INSTRUCTIONS)
+mcp.add_middleware(ReadOnlyToolFilter())
 
 
 @mcp.custom_route("/health", methods=["GET"])

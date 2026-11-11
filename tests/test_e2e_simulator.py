@@ -115,7 +115,7 @@ class TestBackupsAndRestore:
         new_values = ["24/08/19", "99.0", "142", "15:04", "12.1"]
         res = json.loads(await server.edit_dayfile("Edit", 1, new_values))
         assert res["copia_id"] and sim.dayfile[0] == [1, *new_values]
-        assert backups.load(res["copia_id"])["contenido"] == {"line": 1, "row": original}
+        assert backups.load(res["copia_id"])["contenido"] == {"line": 1, "row": original, "accion": "Edit"}
         out = json.loads(await server.restore_backup(res["copia_id"], dry_run=False))
         assert sim.dayfile[0] == original and out["copia_id"]
 
@@ -132,11 +132,53 @@ class TestBackupsAndRestore:
                                   "values": ["25/08/19", "19.0", "138", "14:20", "15.4"]}
 
     @pytest.mark.asyncio
-    async def test_records_backup_is_informative_only(self, sim):
+    async def test_records_edit_saves_previous_value_and_restores_it(self, sim):
         res = json.loads(await server.edit_records("alltime", "highTemp", 35.5, "26/07/2019 16:00"))
-        assert res["copia_id"] and backups.load(res["copia_id"])["tipo"] == "records"
+        content = backups.load(res["copia_id"])["contenido"]
+        assert content["valor"] == "34,6" and content["hora"] == "25/07/2019 15:39" and sim.records["alltime"]["highTemp"][0] == 35.5
         out = json.loads(await server.restore_backup(res["copia_id"], dry_run=False))
-        assert out["aplicado"] is False and "edit_records" in out["error"]
+        assert out["copia_id"] and sim.records["alltime"]["highTemp"] == (34.6, "25/07/2019 15:39")
+
+    @pytest.mark.asyncio
+    async def test_monthly_records_backup_uses_the_month_prefix(self, sim):
+        res = json.loads(await server.edit_records("monthly", "highTemp", 40.0, "11/07/2019 12:00", month=7))
+        assert backups.load(res["copia_id"])["contenido"]["valor"] == "33,0"
+        await server.restore_backup(res["copia_id"], dry_run=False)
+        assert sim.records["monthly"]["7-highTemp"] == (33.0, "10/07/2019 15:00")
+
+    @pytest.mark.asyncio
+    async def test_datalog_edit_is_backed_up_and_restored(self, sim):
+        original = list(sim.datalogs[False][1])
+        res = json.loads(await server.edit_datalog("Edit", 2, ["24/08/19 10:10", "1566641400", "99,9", "62"]))
+        assert sim.datalogs[False][1][3] == "99,9" and backups.load(res["copia_id"])["contenido"]["row"] == original
+        await server.restore_backup(res["copia_id"], dry_run=False)
+        assert sim.datalogs[False][1] == [2, "24/08/19 10:10", "1566641400", "10,7", "61"]
+
+    @pytest.mark.asyncio
+    async def test_recent_data_edit_is_backed_up_and_restored(self, sim):
+        res = json.loads(await server.edit_recent_data("Edit", ["24/08/19 10:00", "1566640800", "88,8"]))
+        assert sim.recent[0][2] == "88,8"
+        await server.restore_backup(res["copia_id"], dry_run=False)
+        assert sim.recent[0] == ["24/08/19 10:00", "1566640800", "10,5"]
+
+    @pytest.mark.asyncio
+    async def test_mysql_cache_edit_is_backed_up_and_restored(self, sim):
+        res = json.loads(await server.edit_mysql_cache("Edit", [7], ["SELECT 1"]))
+        assert sim.mysqlcache[0][1] == "SELECT 1"
+        await server.restore_backup(res["copia_id"], dry_run=False)
+        assert sim.mysqlcache[0] == [7, "INSERT INTO Monthly VALUES (1)"]
+
+    @pytest.mark.asyncio
+    async def test_mysql_cache_delete_reads_the_statements_itself(self, sim):
+        res = json.loads(await server.edit_mysql_cache("Delete", [7]))
+        assert [r[0] for r in sim.mysqlcache] == [8] and "ERROR" not in res["respuesta"]
+        assert json.loads(await server.restore_backup(res["copia_id"], dry_run=False))["aplicado"] is False   # no reinsertable
+
+    @pytest.mark.asyncio
+    async def test_mysql_cache_delete_of_unknown_key_changes_nothing(self, sim):
+        with pytest.raises(ValueError, match="No se encontraron"):
+            await server.edit_mysql_cache("Delete", [999])
+        assert len(sim.mysqlcache) == 2
 
     @pytest.mark.asyncio
     async def test_disabled_backups_do_not_block_writes(self, sim):

@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "pyyaml>=6", "tomli>=2; python_version < '3.11'"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5", "ruff>=0.5", "pyyaml>=6", "tomli>=2; python_version < '3.11'"]
 
 [project.urls]
 Homepage = "https://github.com/edudele/cumulusmx-mcp"
@@ -56,3 +56,12 @@ extend-exclude = ["tests/verify.py"]
 [tool.ruff.lint]
 # Errores reales (sintaxis, nombres sin definir, imports sobrantes, comparaciones erróneas...). Sin reglas de estilo.
 select = ["E4", "E7", "E9", "F"]
+
+[tool.coverage.run]
+source = ["cumulusmx_mcp"]
+branch = false
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]

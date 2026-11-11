@@ -5,6 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.8.0]
+
+### Added
+- **Backups for every history editor.** `edit_datalog`, `edit_recent_data`, `edit_mysql_cache` and `edit_records` now save the
+  previous state before writing (new module `capture`, which reads it from CumulusMX), and `restore_backup` undoes any of the
+  *edits* automatically: day-file and interval-log lines, recent-data records, MySQL-cache statements and records (previous
+  value and time, with the station's decimal separator). Deleting rows cannot be re-inserted through CumulusMX's API, so a
+  delete backup is kept for reference only. `list_backups` accepts the new kinds.
+- **Multi-architecture Docker image** (`linux/amd64` and `linux/arm64`: Raspberry Pi, NAS, Apple Silicon servers), with an
+  emulated arm64 smoke test in CI.
+- **Test coverage in CI** (job `coverage`, minimum 90 %, report in the run summary and as an artifact).
+
+### Changed
+- **The read-only token no longer sees the write tools**: `tools/list` omits them for that token (the guard that refuses and
+  audits any attempt to run one is unchanged).
+- **Oversized responses are truncated into valid JSON.** Instead of cutting the text in the middle (which broke the parsing),
+  a response over 60,000 characters comes back as `{"truncado": true, "caracteres_totales": …, "filas_totales": …,
+  "filas_devueltas": …, "contenido": …}` with as many rows as fit.
+- `edit_mysql_cache`: *Edit* requires exactly one key and one statement (CumulusMX only processes the first); *Delete* reads
+  the statements from the cache when they are not given (the real server fails with a 500 without them) and refuses unknown keys.
+- The test simulator now serves the interval logs, recent data, MySQL cache and every records scope with the real formats.
+
 ## [1.7.0]
 
 ### Added

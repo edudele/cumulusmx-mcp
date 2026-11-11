@@ -61,6 +61,18 @@ async def test_full_token_lists_and_runs_tools(server_url):
 
 
 @pytest.mark.asyncio
+async def test_readonly_token_does_not_even_list_write_tools(server_url):
+    base, _ = server_url
+    async with Client(transport(base, "full-tok")) as c:
+        full = {t.name for t in await c.list_tools()}
+    async with Client(transport(base, "ro-tok")) as c:
+        readonly = {t.name for t in await c.list_tools()}
+    assert {"mysql_table", "edit_dayfile", "restore_backup", "update_settings"} <= full
+    assert not readonly & {"mysql_table", "edit_dayfile", "restore_backup", "update_settings", "edit_records"}
+    assert {"ping", "snapshot", "get_audit_log", "list_backups"} <= readonly and len(readonly) < len(full) - 20
+
+
+@pytest.mark.asyncio
 async def test_readonly_token_can_read_but_writes_are_denied_and_audited(server_url):
     base, audit = server_url
     async with Client(transport(base, "ro-tok")) as c:

@@ -10,7 +10,7 @@ import types
 
 # Orden de búsqueda: primero los módulos que DEFINEN las cosas (los que solo las importan van después).
 _MODULES = (
-    "config", "utils", "safety", "backups", "client", "app", "dayrows", "analysis", "settings_engine", "alerts", "reporting",
+    "config", "utils", "safety", "backups", "client", "capture", "app", "dayrows", "analysis", "settings_engine", "alerts", "reporting",
     "tools.observations", "tools.graphs", "tools.records", "tools.climate", "tools.reports", "tools.maintenance",
     "tools.diary", "tools.settings", "tools.editors", "tools.alerts", "tools.period_report", "tools.safety_tools",
     "resources", "prompts", "cli",

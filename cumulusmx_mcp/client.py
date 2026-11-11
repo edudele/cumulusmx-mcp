@@ -1,5 +1,6 @@
 """Cliente HTTP hacia la API de CumulusMX: autenticación básica, reintentos, recorte de respuestas."""
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -76,9 +77,41 @@ async def _request_get(path: str, params: dict | None = None) -> httpx.Response:
 
 
 def _clip(t: str) -> str:
-    if len(t) > config.MAX_CHARS:
-        return t[:config.MAX_CHARS] + f"\n…[truncado: {len(t)} caracteres; usa rangos más pequeños o downsample]"
-    return t
+    """Recorta las respuestas demasiado grandes. Si son JSON, devuelve un JSON válido (con "truncado": true) en vez de un
+    texto cortado a mitad que ningún cliente podría interpretar; si no, añade un aviso al final."""
+    limit = config.MAX_CHARS
+    if len(t) <= limit:
+        return t
+    hint = "usa rangos más pequeños, filtros o downsample"
+    if t.lstrip()[:1] in "[{":
+        try:
+            data = json.loads(t)
+        except ValueError:
+            data = None
+        if data is not None:
+            return _clip_json(data, len(t), limit, hint)
+    return t[:limit] + f"\n…[truncado: {len(t)} caracteres; {hint}]"
+
+
+def _clip_json(data, total: int, limit: int, hint: str) -> str:
+    """Reduce la lista de filas más larga (la propia respuesta o su clave "data") hasta que quepa; si no hay filas, recorta."""
+    holder, key = (data, "data") if isinstance(data, dict) and isinstance(data.get("data"), list) else (None, None)
+    rows = data["data"] if holder is not None else data if isinstance(data, list) else None
+
+    def envelope(**extra) -> str:
+        return json.dumps({"truncado": True, "caracteres_totales": total, "aviso": hint, **extra}, ensure_ascii=False)
+
+    if rows:
+        keep = len(rows)
+        while keep > 1:
+            keep = max(1, keep // 2 if keep > 8 else keep - 1)
+            kept = rows[:keep]
+            body = {**data, key: kept} if holder is not None else kept
+            out = envelope(filas_totales=len(rows), filas_devueltas=keep, contenido=body)
+            if len(out) <= limit:
+                return out
+    # sin filas que recortar (o ni una cabe): texto parcial dentro de un envoltorio válido
+    return envelope(contenido_parcial=json.dumps(data, ensure_ascii=False)[:max(0, limit - 400)])
 
 
 async def _get(path: str, params: dict | None = None) -> str:

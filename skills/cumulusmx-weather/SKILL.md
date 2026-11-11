@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.7.0"
+  version: "1.8.0"
   server: cumulusmx-mcp
 ---
 
@@ -100,7 +100,7 @@ destructive. When the server runs with `ENABLE_WRITE_TOOLS=false` they are not p
 - MySQL tables: `mysql_table` (create or update the monthly, dayfile or realtime table)
 - History corrections: `edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_mysql_cache`, `edit_records`
 - Device input: `station_input` (sends a reading to the HTTP station endpoint; it is stored as a real observation)
-- Undo: `restore_backup` (restores a settings section or a day-file line from its backup)
+- Undo: `restore_backup` (restores a settings section, a day-file / interval-log line, a recent-data record, a MySQL-cache statement or a record from its backup; deletions are not restorable)
 
 Before using any of them:
 

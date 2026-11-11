@@ -13,7 +13,8 @@ config            environment variables and constants (read once)
 utils             pure helpers: dates, numbers, dict merge, secret masking
 safety            write guard (ENABLE_WRITE_TOOLS, token scope) and audit trail
 backups           pre-write backups and their restoration
-client            HTTP client to CumulusMX: basic auth, retries, response clipping
+client            HTTP client to CumulusMX: basic auth, retries, response clipping (valid JSON envelope when it truncates)
+capture           reads the previous state of what is about to be edited (for the backups)
 app               the FastMCP instance, ASGI middlewares (prefix, Bearer), @write_tool
 dayrows           day-file rows: columns, in-memory cache, basic statistics
 analysis          pure climate calculations over day-file rows (streaks, anomalies, frost, degree days...)

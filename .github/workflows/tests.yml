@@ -50,6 +50,34 @@ jobs:
           MCP_AUTH_TOKEN: ci-test-token
         run: python -m pytest -q
 
+  coverage:
+    name: coverage (mínimo 90 %)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install ".[dev]"
+
+      - name: Run tests with coverage
+        env:
+          MCP_AUTH_TOKEN: ci-test-token
+        run: |
+          python -m pytest -q --cov --cov-fail-under=90 --cov-report=term --cov-report=xml --cov-report=markdown:coverage.md
+          { echo "## Cobertura de tests"; echo; cat coverage.md; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
   docker-smoke:
     name: docker image smoke test
     runs-on: ubuntu-latest
@@ -72,6 +100,32 @@ jobs:
           docker exec mcp cumulusmx-mcp --version
           docker exec mcp sh -c 'touch /data/.write-test && rm /data/.write-test'
           docker logs mcp 2>&1 | tail -20
+
+  docker-arm64:
+    name: docker image smoke test (arm64, emulada)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build arm64 image
+        run: docker buildx build --platform linux/arm64 --load -t cumulusmx-mcp:arm64 .
+
+      - name: Run and check
+        run: |
+          test "$(docker image inspect cumulusmx-mcp:arm64 --format '{{.Architecture}}')" = "arm64"
+          docker run -d --name mcp-arm -p 8001:8000 -e MCP_AUTH_TOKEN=ci-token -e CUMULUSMX_URL=http://127.0.0.1:9 \
+            cumulusmx-mcp:arm64
+          for i in $(seq 1 90); do curl -fsS http://127.0.0.1:8001/health && break; sleep 2; done
+          curl -fsS http://127.0.0.1:8001/health | grep -q '"status":"healthy"'
+          docker exec mcp-arm cumulusmx-mcp --version
+          docker logs mcp-arm 2>&1 | tail -20
 
   dependency-audit:
     name: dependency audit (informational)

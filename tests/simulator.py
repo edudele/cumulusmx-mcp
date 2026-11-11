@@ -39,7 +39,14 @@ class FakeCumulus:
             [1, "24/08/19", "15.0", "142", "15:04", "12.1"],
             [2, "25/08/19", "19.0", "138", "14:20", "15.4"],
         ]
-        self.records = {"alltime": {"highTemp": (34.6, "25 July 2019 15:39")}}
+        self.records: dict[str, dict[str, tuple[float, str]]] = {
+            "alltime": {"highTemp": (34.6, "25/07/2019 15:39")}, "monthly": {"7-highTemp": (33.0, "10/07/2019 15:00")},
+            "thismonth": {}, "thisyear": {}}
+        # logs de intervalo: [nº de línea, DateTime, TS, ...]; datos recientes: [DateTime, TS, ...]; caché MySQL: [clave, sentencia]
+        self.datalogs = {False: [[1, "24/08/19 10:00", "1566640800", "10,5", "60"],
+                                 [2, "24/08/19 10:10", "1566641400", "10,7", "61"]], True: []}
+        self.recent = [["24/08/19 10:00", "1566640800", "10,5"], ["24/08/19 10:10", "1566641400", "10,7"]]
+        self.mysqlcache = [[7, "INSERT INTO Monthly VALUES (1)"], [8, "INSERT INTO Monthly VALUES (2)"]]
         self.temp = "10,0" if decimal_comma else "10.0"
         self.created_tables: list[str] = []
         self.sql_posts: list[str] = []
@@ -116,20 +123,89 @@ class FakeCumulus:
             del self.dayfile[line]
         return self._json({"errors": None})
 
-    async def edit_alltime(self, request: Request) -> Response:
-        body = await self._body(request)
-        self.requests.append(("POST", "/api/edit/alltime", body))
-        text = urllib.parse.unquote(body)                       # Uri.UnescapeDataString: no convierte '+'
-        parts = text.split("&")
-        field, txt_value, txt_time = (p.split("=")[1] for p in parts[:3])
-        # double.Parse con cultura regional: con coma decimal "34.6" se leería como 346 (el punto es separador de miles)
-        value = float(txt_value.replace(".", "").replace(",", ".")) if self.decimal_comma else float(txt_value)
-        time = txt_time.replace("+", " ")
-        self.records.setdefault("alltime", {})[field] = (value, time)
-        return PlainTextResponse("Data updated")
+    def _fmt(self, value: float) -> str:
+        return str(value).replace(".", ",") if self.decimal_comma else str(value)
 
-    async def edit_records_get(self, request: Request) -> Response:
-        return self._json({"data": self.records.get("alltime", {})})
+    def _edit_records_route(self, scope: str):
+        async def route(request: Request) -> Response:
+            body = await self._body(request)
+            self.requests.append(("POST", f"/api/edit/{scope}", body))
+            text = urllib.parse.unquote(body)                   # Uri.UnescapeDataString: no convierte '+'
+            field, txt_value, txt_time = (p.split("=", 1)[1] for p in text.split("&")[:3])
+            # double.Parse con cultura regional: con coma decimal "34.6" se leería como 346 (el punto es separador de miles)
+            value = float(txt_value.replace(".", "").replace(",", ".")) if self.decimal_comma else float(txt_value)
+            self.records[scope][field] = (value, txt_time.replace("+", " "))
+            return PlainTextResponse("Data updated")
+        return route
+
+    def _records_get_route(self, scope: str):
+        async def route(request: Request) -> Response:
+            out: dict[str, str] = {}
+            for field, (value, time) in self.records[scope].items():
+                out[f"{field}Val"], out[f"{field}Time"] = self._fmt(value), time
+            return self._json(out)
+        return route
+
+    def _page(self, rows: list, request: Request) -> Response:
+        q = request.query_params
+        search, start, length = q.get("search[value]", ""), int(q.get("start", 0)), int(q.get("length", 10))
+        found = [r for r in rows if search in ",".join(map(str, r))]
+        return self._json({"draw": 1, "recordsTotal": len(rows), "recordsFiltered": len(found),
+                           "data": found[start:start + length]})
+
+    async def logfile_get(self, request: Request) -> Response:
+        return self._page(self.datalogs[False], request)
+
+    async def extralogfile_get(self, request: Request) -> Response:
+        return self._page(self.datalogs[True], request)
+
+    async def recent_get(self, request: Request) -> Response:
+        return self._page(self.recent, request)
+
+    async def mysqlcache_get(self, request: Request) -> Response:
+        return self._page(self.mysqlcache, request)
+
+    async def edit_datalogs(self, request: Request) -> Response:
+        body = await self._body(request)
+        self.requests.append(("POST", "/api/edit/datalogs", body))
+        new = json.loads(body)
+        rows = self.datalogs[bool(new.get("extra"))]
+        index = new["lines"][0] - 1
+        if index >= len(rows) or str(rows[index][2]) != str(new["data"][0][1]):
+            return self._json({"errors": {"Logfile": ["TS distinto"]}}, 500)
+        if new["action"] == "Edit":
+            rows[index] = [index + 1, *new["data"][0]]
+        else:
+            del rows[index]
+        return self._json({"errors": None})
+
+    async def edit_recentdata(self, request: Request) -> Response:
+        body = await self._body(request)
+        self.requests.append(("POST", "/api/edit/recentdata", body))
+        new = json.loads(body)
+        row = new["data"][0]
+        found = next((i for i, r in enumerate(self.recent) if str(r[1]) == str(row[1])), None)
+        if found is None:
+            return self._json({"errors": {"Recent": ["no existe"]}}, 500)
+        if new["action"] == "Edit":
+            self.recent[found] = row
+        else:
+            del self.recent[found]
+        return self._json({"errors": None})
+
+    async def edit_mysqlcache(self, request: Request) -> Response:
+        body = await self._body(request)
+        self.requests.append(("POST", "/api/edit/mysqlcache", body))
+        new = json.loads(body)
+        if not new.get("statements"):                         # el servidor real itera `statements`: sin ellas da 500
+            return self._json({"errors": "statements ausente"}, 500)
+        if new["action"] == "Edit":
+            for row in self.mysqlcache:
+                if row[0] == new["keys"][0]:
+                    row[1] = new["statements"][0]
+        else:
+            self.mysqlcache = [r for r in self.mysqlcache if r[0] not in new["keys"]]
+        return self._json({"errors": None})
 
     async def version(self, request: Request) -> Response:
         return self._json({"Version": "5.2.0", "Build": "5026"})
@@ -141,10 +217,18 @@ class FakeCumulus:
             Route("/api/tags/process.json", self.tags),
             Route("/api/data/dayfile", self.dayfile_get),
             Route("/api/edit/dayfile", self.edit_dayfile, methods=["POST"]),
-            Route("/api/edit/alltime", self.edit_alltime, methods=["POST"]),
-            Route("/api/edit/alltimerecords.json", self.edit_records_get),
+            Route("/api/data/logfile", self.logfile_get),
+            Route("/api/data/extralogfile", self.extralogfile_get),
+            Route("/api/data/recentdata", self.recent_get),
+            Route("/api/data/mysqlcache.json", self.mysqlcache_get),
+            Route("/api/edit/datalogs", self.edit_datalogs, methods=["POST"]),
+            Route("/api/edit/recentdata", self.edit_recentdata, methods=["POST"]),
+            Route("/api/edit/mysqlcache", self.edit_mysqlcache, methods=["POST"]),
             Route("/api/info/version.json", self.version),
         ]
+        for scope in ("alltime", "monthly", "thismonth", "thisyear"):
+            r.append(Route(f"/api/edit/{scope}", self._edit_records_route(scope), methods=["POST"]))
+            r.append(Route(f"/api/edit/{scope}records.json", self._records_get_route(scope)))
         return Starlette(routes=r)
 
     def client(self) -> httpx.AsyncClient:

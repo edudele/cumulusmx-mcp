@@ -17,7 +17,7 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 - **Historical data & Analytics** — daily summaries from dayfile across all years, flexible column alias filtering (`date`, `mintemp`, `rain`, etc.) and aggregated statistical summaries (`summary_only`).
 - **Agronomy & climate tools** — `climatology` (monthly normals), `frost_dates` (last spring / first autumn frost, frost-free period), `degree_days` (growing degree days), `wind_rose` (16-point rose) and `daily_briefing` (live conditions + yesterday in context + month vs normal + streaks in progress).
 - **Full CumulusMX API coverage** — read *and* write: every settings section (`get_settings` / `update_settings` with merge, `dry_run` preview and no blind writes), dedicated **MySQL** and **MQTT** tools (`get_/update_mysql_settings`, `mysql_table`, `get_/update_mqtt_settings`, `mysql_cache`), history corrections (`edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_records`), diary import/export, `interval_data` / `daily_data`, `records_query`, custom charts, WebSocket `live_sample` and HTTP station input. See [API coverage](#api-coverage).
-- **Safety net for the write tools** — every write is **audited** (log + optional JSON-Lines file, secrets masked), the previous state is **backed up automatically** and can be undone with `restore_backup`, and an optional **read-only token** lets others query the station without being able to change anything. See [Security model](#security-model).
+- **Safety net for the write tools** — every write is **audited** (log + optional JSON-Lines file, secrets masked), the previous state is **backed up automatically** and can be undone with `restore_backup`, and an optional **read-only token** lets others query the station without being able to change anything (it does not even see the write tools). See [Security model](#security-model).
 - **Alerts and reports** — `weather_alerts` (frost, wind, rain, heat, UV, pressure drop...) and `period_report` (a shareable Markdown weekly / monthly / yearly report compared with the station's own normals).
 - **Runs anywhere** — Docker, `pip`/`uvx`, or **stdio** for local clients such as Claude Desktop. Pinned dependencies, tested on FastMCP 3.x and 4.x and Python 3.10 - 3.13.
 - **Resilient** — GET requests to CumulusMX are retried with backoff on transient failures; timeouts are configurable.
@@ -41,6 +41,8 @@ Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker
 ## Quick start
 
 ### Docker
+
+The image is multi-architecture (`linux/amd64` and `linux/arm64`), so it runs the same on a PC, a NAS or a Raspberry Pi.
 
 ```bash
 docker run -d \
@@ -132,10 +134,10 @@ See [`.env.example`](.env.example) for all variables.
 | Layer | What it does |
 |---|---|
 | **Bearer token** (`MCP_AUTH_TOKEN`) | Required on every request except `/health`. Full access. |
-| **Read-only token** (`MCP_AUTH_TOKEN_READONLY`) | Optional second token. It can use every read tool, but write tools answer *"este token es de solo lectura"* and settings come back with passwords masked. The client still *lists* the write tools; it just cannot run them. |
+| **Read-only token** (`MCP_AUTH_TOKEN_READONLY`) | Optional second token. It can use every read tool; `tools/list` does **not** include the write tools for it, any attempt to run one is refused (*"este token es de solo lectura"*) and audited, and settings come back with passwords masked. |
 | **`ENABLE_WRITE_TOOLS=false`** | The 29 write tools are not published at all. |
 | **Audit** | Each write is recorded (tool, token scope, arguments with secrets masked, result `ok` / `fallo` / `denegado` / `error`) in the log and, with `CUMULUS_AUDIT_FILE`, in a JSON-Lines file. `get_audit_log` shows the recent ones. |
-| **Backups and undo** | Before changing a settings section, a day-file line or the records, the previous state is saved (`CUMULUS_BACKUP_DIR`, files `0600`). `list_backups` / `get_backup` / `restore_backup` undo it, and a restore is itself undoable. |
+| **Backups and undo** | Before changing a settings section, a day-file line, an interval-log line, a recent-data record, a MySQL-cache statement or a record, the previous state is saved (`CUMULUS_BACKUP_DIR`, files `0600`). `list_backups` / `get_backup` / `restore_backup` undo it, and a restore is itself undoable. |
 | **No blind writes** | Settings updates read the current section first and refuse to write if they cannot (the old classic updaters used to overwrite with only the fragment). `dry_run=true` previews the diff. |
 | **Secrets** | Passwords are returned by the settings tools unless `CUMULUS_MASK_SECRETS=true` or the read-only token is used. They never appear in the audit log. Backups can contain them, hence the `0600` permissions. |
 | **No outbound calls** | The server only talks to CumulusMX. FastMCP's update check against PyPI is disabled by default. |
@@ -149,7 +151,7 @@ Keep the server behind HTTPS (a reverse proxy) when it is reachable from outside
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.7.0"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.8.0"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.
@@ -263,8 +265,8 @@ Add it to your MCP client (e.g. Hermes, Claude Desktop) with:
 |---|---|
 | `weather_alerts` | Active alerts right now: frost (today / in progress / night risk), strong wind, intense rain, heat, high UV, fast pressure drop, very dry hot air, station without data. Thresholds can be overridden |
 | `period_report` | Shareable Markdown report for a week, month or year: temperatures, rain and streaks, wind, pressure, sun and a comparison with the station's own normals |
-| `list_backups` / `get_backup` | Backups taken before each write (settings, day-file lines, records) |
-| `restore_backup` | Undo a settings change or a day-file edit from its backup (`dry_run=true` by default; the restore is undoable too) |
+| `list_backups` / `get_backup` | Backups taken before each write (settings, day-file and interval-log lines, recent data, MySQL cache, records) |
+| `restore_backup` | Undo any *edit* from its backup: settings, day-file / interval-log lines, recent data, MySQL-cache statements and records (`dry_run=true` by default; the restore is undoable too). Deletions cannot be re-inserted through CumulusMX's API; their backup keeps the content |
 | `get_audit_log` | Recent writes done through this server |
 
 ### Configuration, MySQL & MQTT
