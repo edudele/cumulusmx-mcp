@@ -373,7 +373,8 @@ async def test_recent_data_edit_and_restore(client, data_dir):
     assert db_before is not None and db_after is not None
     for a, b in zip(db_before, db_after):
         if isinstance(a, float) or isinstance(b, float):
-            assert abs(float(a) - float(b)) < 0.06, f"la base de datos cambió más que la precisión mostrada: {db_before} {db_after}"
+            # CumulusMX restaura desde lo que MUESTRA su tabla (algunas columnas sin decimales): la base queda a esa precisión
+            assert abs(float(a) - float(b)) <= 0.51, f"la base de datos cambió más que la precisión mostrada: {db_before} {db_after}"
         else:
             assert a == b, f"la base de datos cambió: {db_before} {db_after}"
 
@@ -427,8 +428,12 @@ async def test_records_edit_and_restore(client, data_dir, scope, field, first, s
     assert (after[f"{field}Val"], after[f"{field}Time"]) == (state[f"{field}Val"], state[f"{field}Time"]), \
         "el récord restaurado difiere del que había antes de la segunda edición"
     assert record_lines(data_dir, scope, field) == lines, "el .ini difiere tras restaurar (hasta la precisión que muestra CumulusMX)"
+    previous = json.loads(await call(client, "get_backup", backup_id=one["copia_id"]))["contenido"]
     attempt = json.loads(await call(client, "restore_backup", backup_id=one["copia_id"], dry_run=False))
-    assert attempt.get("aplicado") is False and "no tenía valor o fecha" in attempt.get("error", ""), attempt
+    if str(previous.get("valor", "")).strip() in ("-", "") or str(previous.get("hora", "")).strip() in ("-", ""):
+        assert attempt.get("aplicado") is False and "no tenía valor o fecha" in attempt.get("error", ""), attempt
+    else:                                  # el Simulator ya había establecido ese récord: sí se puede volver a él
+        assert attempt.get("aplicado") is True, attempt
 
 
 async def test_monthly_record_edit_chain_and_restore(client, data_dir):
@@ -450,6 +455,8 @@ async def test_monthly_record_edit_chain_and_restore(client, data_dir):
 def perturb(node, path=()):
     """Primer texto 'seguro' del JSON (no contraseñas ni credenciales) -> (ruta, valor nuevo)."""
     if isinstance(node, dict):
+        if node.get("enabled") is False:   # CumulusMX solo guarda los campos de un servicio si está habilitado (p. ej. cwop.server)
+            return None
         for key, value in node.items():
             if (isinstance(value, str) and value and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
                     and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time", key, re.I)):
