@@ -7,6 +7,7 @@
    de datos de CumulusMX (dayfile, logs, ini, SQLite) para demostrar que los datos quedan como estaban.
 """
 import datetime as dt
+import itertools
 import json
 import re
 import sqlite3
@@ -454,19 +455,25 @@ async def test_monthly_record_edit_chain_and_restore(client, data_dir):
         assert attempt.get("aplicado") is True, attempt
 
 
-def perturb(node, path=()):
-    """Primer texto 'seguro' del JSON (no contraseñas ni credenciales) -> (ruta, valor nuevo)."""
+SAFE_KEY = re.compile(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", re.I)
+UNSAFE_KEY = re.compile(r"pass|secret|token|key|user|email|url|path|file|addr|date|time", re.I)
+
+
+def candidates(node, path=()):
+    """Textos 'seguros' del JSON (ni contraseñas ni credenciales; vacíos y null incluidos) -> (ruta, valor nuevo).
+    CumulusMX ignora algunos campos según la configuración (servicios deshabilitados...): se prueban por orden hasta que uno se guarde."""
     if isinstance(node, dict):
         if node.get("enabled") is False:   # CumulusMX solo guarda los campos de un servicio si está habilitado (p. ej. cwop.server)
-            return None
+            return
         for key, value in node.items():
-            if (isinstance(value, str) and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
-                    and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time", key, re.I)):
-                return path + (key,), value.strip() + "-ci"
-            found = perturb(value, path + (key,))
-            if found:
-                return found
-    return None
+            if (value is None or isinstance(value, str)) and SAFE_KEY.search(key) and not UNSAFE_KEY.search(key):
+                yield path + (key,), (value or "").strip() + "-ci"
+            else:
+                yield from candidates(value, path + (key,))
+
+
+def perturb(node, path=()):
+    return next(candidates(node, path), None)
 
 
 def diff_paths(a, b, path=()):
@@ -505,15 +512,26 @@ def without_quirks(section: str, node):
     return node
 
 
+async def change_one_saved_field(client, section: str, before: dict, tool: str | None = None):
+    """Prueba campos candidatos hasta que CumulusMX guarde uno. Devuelve (ruta, valor, respuesta) o None si ninguno se guarda."""
+    for path, new in itertools.islice(candidates(before), 8):
+        if tool:
+            res = envelope(await call(client, tool, settings=nested(path, new), dry_run=False))
+        else:
+            res = envelope(await call(client, "update_settings", section=section, settings=nested(path, new), dry_run=False))
+        if res.get("aplicado") is True:
+            return path, new, res
+        assert res.get("no_guardados"), f"update_settings no aplicó {path} y tampoco dijo por qué: {res}"
+    return None
+
+
 async def check_section_round_trip(client, section: str) -> bool:
     """Cambia un texto de la sección, comprueba que CumulusMX lo guardó, restaura y compara. False si no hay texto que probar."""
     before = json.loads(await call(client, "get_settings", section=section))
-    found = perturb(before)
-    if not found:
+    changed = await change_one_saved_field(client, section, before)
+    if changed is None:
         return False
-    path, new = found
-    res = envelope(await call(client, "update_settings", section=section, settings=nested(path, new), dry_run=False))
-    assert res.get("aplicado") is True, res
+    path, new, res = changed
     during = json.loads(await call(client, "get_settings", section=section))
     assert str(at(during, path)).strip() == new.strip(), f"CumulusMX no guardó el cambio en {path}"
     out = await restore(client, res["copia_id"])
@@ -552,10 +570,9 @@ async def test_dedicated_settings_tools(client):
         await restore(client, res["copia_id"])
         assert blank_as_none(json.loads(await call(client, "get_settings", section=section))) == blank_as_none(before), f"{section} no volvió a su estado"
     noaa_before = json.loads(await call(client, "get_settings", section="noaa"))
-    found = perturb(noaa_before)
-    assert found, "la sección noaa no tiene ningún texto que probar"
-    res = envelope(await call(client, "update_noaa_settings", settings=nested(*found[:1], found[1]), dry_run=False))
-    await restore(client, res["copia_id"])
+    changed = await change_one_saved_field(client, "noaa", noaa_before, tool="update_noaa_settings")
+    assert changed, "ningún texto de la sección noaa se pudo cambiar"
+    await restore(client, changed[2]["copia_id"])
     assert blank_as_none(json.loads(await call(client, "get_settings", section="noaa"))) == blank_as_none(noaa_before)
 
 
