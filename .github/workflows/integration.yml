@@ -1,0 +1,109 @@
+name: Integration (real CumulusMX)
+
+# Prueba el MCP contra un CumulusMX de verdad (la versión oficial publicada, con la estación "Simulator" y datos de prueba),
+# no contra el simulador escrito a mano: así un malentendido del formato del servidor real no pasa desapercibido.
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      cumulusmx_build:
+        description: "Build de CumulusMX contra el que probar (el que ejecuta la estación real)"
+        required: false
+        default: "5026"
+
+env:
+  CUMULUSMX_BUILD: ${{ inputs.cumulusmx_build || '5026' }}
+
+jobs:
+  real-cumulusmx:
+    name: MCP vs CumulusMX real (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: ["es-ES"]        # la estación real usa coma decimal; en-GB se añade cuando es-ES esté estable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install the MCP
+        run: pip install ".[dev]"
+
+      - name: Download the official CumulusMX release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/cumulusmx/CumulusMX/releases?per_page=100" --paginate \
+            --jq '.[] | [.tag_name, .name, (.assets | map(.name) | join(","))] | @tsv' > releases.tsv
+          echo "Releases visibles (tag | nombre | ficheros):"; head -15 releases.tsv
+          tag=$(awk -F'\t' -v b="$CUMULUSMX_BUILD" 'index($1, b) || index($2, b) {print $1; exit}' releases.tsv)
+          if [ -z "$tag" ]; then echo "No hay release para el build $CUMULUSMX_BUILD" >&2; exit 1; fi
+          echo "Release elegida: $tag"
+          mkdir -p cmx-dl && gh release download "$tag" -R cumulusmx/CumulusMX -D cmx-dl
+          ls -la cmx-dl
+          mkdir -p cmx && cd cmx
+          for z in ../cmx-dl/*.zip; do unzip -q -o "$z"; done
+          ls | head -40
+
+      - name: Configure the Simulator station
+        run: |
+          set -euo pipefail
+          cd cmx
+          # el zip puede traer todo dentro de una carpeta
+          if [ ! -f CumulusMX.dll ]; then d=$(dirname "$(find . -name CumulusMX.dll | head -1)"); cd "$d"; fi
+          pwd > ../cmx-dir.txt
+          cat > Cumulus.ini <<'EOF'
+          [Station]
+          Type=17
+          LocName=CI Station
+          Latitude=40.4
+          Longitude=-3.7
+          Altitude=650
+          EOF
+          sed -i 's/^          //' Cumulus.ini
+          cat Cumulus.ini
+
+      - name: Start CumulusMX
+        run: |
+          set -euo pipefail
+          cd "$(cat cmx-dir.txt)"
+          export DOTNET_gcServer=0
+          nohup dotnet CumulusMX.dll -port 8998 -lang "${{ matrix.lang }}" -service > "$GITHUB_WORKSPACE/cmx.log" 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8998/api/info/version.json; then echo; echo "CumulusMX responde"; exit 0; fi
+            sleep 2
+          done
+          echo "CumulusMX no arrancó" >&2; tail -60 "$GITHUB_WORKSPACE/cmx.log"; exit 1
+
+      - name: Reconnaissance of the real API
+        run: |
+          cd "$(cat cmx-dir.txt)"
+          for p in /api/info/version.json "/api/tags/process.json?temp&hum" "/api/data/dayfile?draw=1&start=0&length=2" \
+                   "/api/data/recentdata?draw=1&start=0&length=2" /api/settings/mysqldata.json /api/edit/alltimerecords.json; do
+            echo "=== $p"; curl -sS -m 20 "http://127.0.0.1:8998$p" | head -c 700; echo
+          done
+          echo "=== data dir"; ls -la data 2>/dev/null | head -30
+
+      - name: Diagnostics (always)
+        if: always()
+        run: |
+          tail -80 cmx.log || true
+          d="$(cat cmx-dir.txt 2>/dev/null || echo cmx)"
+          ls -la "$d" | head -40 || true
+          tail -60 "$d"/MXdiags/*.txt 2>/dev/null | tail -120 || true
