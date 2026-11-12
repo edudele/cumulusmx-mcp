@@ -19,6 +19,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 os.environ.setdefault("MCP_AUTH_TOKEN", "test-secret-token-12345")
 
 import server  # noqa: E402
+from tests.compat import saved_settings_reader  # noqa: E402
 
 # Rutas /api/settings/* y /api/setsettings/* tal como aparecen en los `case` de Api.cs (CumulusMX 5.2.0)
 OFFICIAL_SETTINGS_GET = {
@@ -54,8 +55,10 @@ def decode_body(body: str, style: str = "form") -> dict:
 
 
 def mocks(current=None, response="success"):
-    return (patch.object(server, "_json", new=AsyncMock(return_value=current)),
-            patch.object(server, "_post", new=AsyncMock(return_value=response)))
+    """(_json, _post) simulados; tras un POST, _json devuelve lo enviado, como un CumulusMX que guarda los ajustes."""
+    post = AsyncMock(return_value=response)
+    read = AsyncMock(side_effect=saved_settings_reader(current, post))
+    return patch.object(server, "_json", new=read), patch.object(server, "_post", new=post)
 
 
 # ---------------------------------------------------------------- tabla de secciones ----

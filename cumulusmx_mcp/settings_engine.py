@@ -127,7 +127,55 @@ async def _settings_update(section: str, settings: dict[str, Any] | str, dry_run
     response = await client._post(f"/api/setsettings/{post_path}", content=_encode_settings_body(style, merged), headers=headers)
     result["aplicado"] = True
     result["respuesta"] = response
+    ignored = await _ignored_changes(get_path, merged, changes)
+    if ignored:
+        result["no_guardados"] = ignored
+        result["aviso"] = ("CumulusMX respondió bien pero NO guardó estos campos: " + ", ".join(ignored) + ". Suele pasar con un "
+                           "servicio deshabilitado (CumulusMX solo guarda los campos de un servicio si está habilitado: pon "
+                           "enabled=true en la misma llamada).")
+        if len(ignored) == len(changes):
+            result["aplicado"] = False
+            result["nota"] = result["aviso"]
     return json.dumps(result, ensure_ascii=False)
+
+
+def _same_setting(wanted: Any, actual: Any) -> bool:
+    """Igualdad tolerante: CumulusMX devuelve vacío como null o "" y los números a veces como texto."""
+    if wanted in (None, "") and actual in (None, ""):
+        return True
+    try:
+        return float(wanted) == float(actual)
+    except (TypeError, ValueError):
+        return wanted == actual
+
+
+async def _ignored_changes(get_path: str, merged: dict[str, Any], changes: dict[str, dict]) -> dict[str, dict]:
+    """Campos pedidos que, al volver a leer la sección, CumulusMX no tiene guardados: {ruta: {pedido, actual}}.
+
+    Los secretos no se comparan (el diff los enmascara) ni se devuelven. Si no se puede releer, no se afirma nada."""
+    try:
+        fresh = await client._json(f"/api/settings/{get_path}")
+    except Exception:  # pragma: no cover - relectura opcional
+        return {}
+    if not isinstance(fresh, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for path in changes:
+        if utils.SECRET_KEY_RE.search(path.rsplit(".", 1)[-1]):
+            continue
+        wanted, actual = _lookup(merged, path), _lookup(fresh, path)
+        if not _same_setting(wanted, actual):
+            out[path] = {"pedido": wanted, "actual": actual}
+    return out
+
+
+def _lookup(node: Any, path: str) -> Any:
+    for key in path.split("."):
+        if isinstance(node, dict) and key in node:
+            node = node[key]
+        else:
+            return None
+    return node
 
 
 async def legacy_update(section: str, settings: dict[str, Any] | str) -> str:

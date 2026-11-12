@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import server  # noqa: E402
 from cumulusmx_mcp import app as app_module  # noqa: E402
-from cumulusmx_mcp import backups, config, safety  # noqa: E402
+from cumulusmx_mcp import backups, client, config, safety  # noqa: E402
 from tests.simulator import FakeCumulus, csharp_url_decode  # noqa: E402
 
 
@@ -265,6 +265,23 @@ class TestBackupsAndRestore:
                 await server.edit_dayfile("Edit", 1, ["24/08/19", "1"])
         assert json.loads(await server.get_settings("mqtt")) == before, "se escribió aunque no había copia"
         assert row is None or list(sim.dayfile[0]) == row
+
+    @pytest.mark.asyncio
+    async def test_settings_ignored_by_cumulusmx_are_reported(self, sim):
+        """CumulusMX responde 200 pero no guarda los campos de un servicio deshabilitado (visto con CWOP y MQTT reales): el MCP
+        lo comprueba releyendo y no dice que se aplicó."""
+        stale = await client._json("/api/settings/mqttdata.json")
+        reads = []
+        real_json = client._json
+
+        async def reread_returns_old_values(path, *args, **kwargs):
+            reads.append(path)
+            return stale if len(reads) >= 2 else await real_json(path, *args, **kwargs)
+
+        with patch.object(client, "_json", reread_returns_old_values):
+            res = json.loads(await server.update_mqtt_settings({"server": "otro-broker"}))
+        assert res["aplicado"] is False and list(res["no_guardados"]) == ["server"] and "NO guardó" in res["aviso"]
+        assert res["no_guardados"]["server"]["pedido"] == "otro-broker"
 
     @pytest.mark.asyncio
     async def test_list_and_get_backup_tools(self, sim):

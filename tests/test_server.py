@@ -33,6 +33,7 @@ TEST_TOKEN = "test-secret-token-12345"
 os.environ["MCP_AUTH_TOKEN"] = TEST_TOKEN
 
 import server  # noqa: E402
+from tests.compat import saved_settings_reader  # noqa: E402
 
 
 # =====================================================================
@@ -1155,7 +1156,7 @@ class TestSettingsTools:
         monkeypatch.setenv("ENABLE_WRITE_TOOLS", "true")
         with patch.object(server, "_json", new_callable=AsyncMock) as mock_json, \
              patch.object(server, "_post", new_callable=AsyncMock) as mock_post:
-            mock_json.return_value = {"AnnualRainfall": {"ytdamount": 50.0, "rainseasonstart": 1}}
+            mock_json.side_effect = saved_settings_reader({"AnnualRainfall": {"ytdamount": 50.0, "rainseasonstart": 1}}, mock_post)
             mock_post.return_value = "success"
 
             res = await server.update_station_settings({"AnnualRainfall": {"ytdamount": 75.0}})
@@ -1182,7 +1183,7 @@ class TestSettingsTools:
         monkeypatch.setenv("ENABLE_WRITE_TOOLS", "true")
         with patch.object(server, "_json", new_callable=AsyncMock) as mock_json, \
              patch.object(server, "_post", new_callable=AsyncMock) as mock_post:
-            mock_json.return_value = {"data": {"tempBelow": {"enabled": False}}}
+            mock_json.side_effect = saved_settings_reader({"data": {"tempBelow": {"enabled": False}}}, mock_post)
             mock_post.return_value = "success"
 
             res = await server.update_alarm_settings({"tempBelow": {"enabled": True}})
