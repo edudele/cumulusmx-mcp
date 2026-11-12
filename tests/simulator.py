@@ -41,7 +41,8 @@ class FakeCumulus:
             [2, "25/08/19", "19.0", "138", "14:20", "15.4"],
         ]
         self.records: dict[str, dict[str, tuple[float, str]]] = {
-            "alltime": {"highTemp": (34.6, "25/07/2019 15:39"), "lowHumidity": (6, "14/09/2024 16:45")}, "monthly": {"7-highTemp": (33.0, "10/07/2019 15:00")},
+            "alltime": {"highTemp": (34.6, "25/07/2019 15:39"), "lowHumidity": (6, "14/09/2024 16:45"),
+                        "highMinTemp": (None, "-")}, "monthly": {"7-highTemp": (33.0, "10/07/2019 15:00")},
             "thismonth": {}, "thisyear": {}}
         # logs de intervalo: [nº de línea, DateTime, TS, ...]; datos recientes: [DateTime, TS, ...]; caché MySQL: [clave, sentencia]
         self.datalogs = {False: [[1, "24/08/19 10:00", "1566640800", "10,5", "60"],
@@ -155,7 +156,7 @@ class FakeCumulus:
         async def route(request: Request) -> Response:
             out: dict[str, str] = {}
             for field, (value, time) in self.records[scope].items():
-                out[f"{field}Val"] = str(value) if isinstance(value, int) else self._fmt(value)
+                out[f"{field}Val"] = "-" if value is None else str(value) if isinstance(value, int) else self._fmt(value)
                 out[f"{field}Time"] = time
             return self._json(out)
         return route

@@ -193,6 +193,25 @@ class TestBackupsAndRestore:
         assert json.loads(await server.restore_backup(res["copia_id"], dry_run=False))["aplicado"] is True
 
     @pytest.mark.asyncio
+    async def test_editors_accept_numbers_and_nulls_over_the_mcp_protocol(self, sim):
+        """Un cliente MCP envía los números de la fila como números JSON, no como texto (se vio con CumulusMX real)."""
+        from fastmcp import Client
+        row = list(sim.recent[0])
+        row[7] = 55.5
+        async with Client(server.mcp) as c:
+            res = await c.call_tool("edit_recent_data", {"action": "Edit", "values": row})
+            assert "ERROR" not in res.content[0].text and sim.recent[0][7] == 55.5
+            log = await c.call_tool("edit_datalog", {"action": "Edit", "line": 1,
+                                                     "values": ["24/08/19 10:00", 1566640800, 12.5, 60, None]})
+            assert "ERROR" not in log.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_a_record_without_previous_value_explains_why_it_cannot_be_restored(self, sim):
+        res = json.loads(await server.edit_records("alltime", "highMinTemp", 12.0, "01/02/2026 08:00"))
+        out = json.loads(await server.restore_backup(res["copia_id"], dry_run=False))
+        assert out["aplicado"] is False and "no tenía valor" in out["error"]
+
+    @pytest.mark.asyncio
     async def test_integer_records_are_sent_as_integers(self, sim):
         res = json.loads(await server.edit_records("alltime", "lowHumidity", 7, "15/09/2024 10:00"))
         assert "ERROR" not in res["respuesta"] and sim.records["alltime"]["lowHumidity"] == (7, "15/09/2024 10:00")

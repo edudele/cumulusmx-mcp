@@ -57,6 +57,10 @@ def _plan(record: dict) -> tuple[str, dict, object] | tuple[str, None, str]:
         item = content["items"][0]
         return "edit_mysql_cache", {"action": "Edit", "keys": [item["key"]], "statements": [item["statement"]]}, \
             lambda dry: editors._edit_mysql_cache("Edit", [item["key"]], [item["statement"]])
+    if kind == "records" and str(content.get("valor", "")).strip() in ("-", ""):
+        return kind, None, ("El récord no tenía valor antes de la edición (CumulusMX muestra «-»). El editor de CumulusMX no "
+                            "permite dejar un récord sin valor, así que no se puede restaurar automáticamente; get_backup "
+                            "conserva lo que había.")
     if kind == "records" and "valor" in content:
         args = {"scope": content["scope"], "field": content["field"], "month": content.get("month"),
                 "value": capture.parse_regional_number(content["valor"]), "time": content["hora"]}

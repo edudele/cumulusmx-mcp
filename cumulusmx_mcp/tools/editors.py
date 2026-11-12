@@ -12,6 +12,14 @@ from .. import settings_engine
 from ..app import write_tool
 
 
+Cell = str | int | float | None
+
+
+def _cell(value: Cell) -> str:
+    """Un valor de una fila de log/dayfile como texto; None (campo vacío) se envía como cadena vacía."""
+    return "" if value is None else str(value)
+
+
 def _editor_payload(action: str, lines: list[int] | None = None, data: list[list[str]] | None = None, **extra: Any) -> str:
     if action not in ("Edit", "Delete"):
         raise ValueError("action debe ser 'Edit' o 'Delete'")
@@ -37,12 +45,12 @@ def _check_action(action: str) -> None:
         raise ValueError("action debe ser 'Edit' o 'Delete'")
 
 
-async def _edit_dayfile(action: str, line: int, values: list[str]) -> str:
+async def _edit_dayfile(action: str, line: int, values: list[str | int | float | None]) -> str:
     """Implementación de edit_dayfile (también la usa restore_backup)."""
     _check_action(action)
     if line < 1 or not values:
         raise ValueError("line debe ser >= 1 y values no puede estar vacío")
-    payload = _editor_payload(action, [line], [[str(v) for v in values]])
+    payload = _editor_payload(action, [line], [[_cell(v) for v in values]])
     row = await capture.dayfile_line(line) if backups.enabled() else None
     backup_id = backups.save("dayfile", f"linea{line}", {"line": line, "row": row, "accion": action}, "edit_dayfile") if row else None
     response = await client._post("/api/edit/dayfile", content=payload, headers=settings_engine.JSON_HEADERS)
@@ -51,7 +59,7 @@ async def _edit_dayfile(action: str, line: int, values: list[str]) -> str:
 
 
 @write_tool
-async def edit_dayfile(action: Literal["Edit", "Delete"], line: int, values: list[str]) -> str:
+async def edit_dayfile(action: Literal["Edit", "Delete"], line: int, values: list[str | int | float | None]) -> str:
     """Edita o borra UNA línea del dayfile.txt (corrección de datos históricos). line: número de línea (1 = primera; es el
     primer valor que devuelve la tool dayfile). values: los campos de esa línea tal como aparecen en dayfile.txt (fecha
     dd/MM/yy primero, sin el número de línea). CumulusMX comprueba que la fecha coincide con la de la línea indicada.
@@ -60,12 +68,12 @@ async def edit_dayfile(action: Literal["Edit", "Delete"], line: int, values: lis
     return await _edit_dayfile(action, line, values)
 
 
-async def _edit_datalog(action: str, line: int, values: list[str], extra: bool) -> str:
+async def _edit_datalog(action: str, line: int, values: list[str | int | float | None], extra: bool) -> str:
     _check_action(action)
     if line < 1 or len(values) < 2:
         raise ValueError("line debe ser >= 1 y values debe incluir al menos DateTime y TS")
     ts = str(values[1])
-    payload = _editor_payload(action, [line], [[str(v) for v in values]], extra=extra)
+    payload = _editor_payload(action, [line], [[_cell(v) for v in values]], extra=extra)
     row = await capture.datalog_line(line, ts, extra) if backups.enabled() else None
     backup_id = backups.save("datalog", f"linea{line}-{ts}", {"line": line, "extra": extra, "ts": ts, "row": row,
                                                               "accion": action}, "edit_datalog") if row else None
@@ -74,7 +82,7 @@ async def _edit_datalog(action: str, line: int, values: list[str], extra: bool) 
 
 
 @write_tool
-async def edit_datalog(action: Literal["Edit", "Delete"], line: int, values: list[str], extra: bool = False) -> str:
+async def edit_datalog(action: Literal["Edit", "Delete"], line: int, values: list[str | int | float | None], extra: bool = False) -> str:
     """Edita o borra una línea de un log mensual de intervalo (extra=True: log de sensores extra). El fichero se deduce del
     segundo campo (TS, segundos Unix) de values; line es la línea dentro de ese fichero (1 = primera, es el primer valor de
     las filas de la tool logfile). values: todos los campos de la línea del log (sin el número de línea). CumulusMX comprueba
@@ -101,7 +109,7 @@ def _recent_row(values: list) -> list[str]:
     return row
 
 
-async def _edit_recent(action: str, values: list[str]) -> str:
+async def _edit_recent(action: str, values: list[str | int | float | None]) -> str:
     _check_action(action)
     sent = _recent_row(values)
     timestamp = sent[0].strip()
@@ -113,7 +121,7 @@ async def _edit_recent(action: str, values: list[str]) -> str:
 
 
 @write_tool
-async def edit_recent_data(action: Literal["Edit", "Delete"], values: list[str]) -> str:
+async def edit_recent_data(action: Literal["Edit", "Delete"], values: list[str | int | float | None]) -> str:
     """Edita o borra un registro de la tabla de datos recientes (SQLite) de CumulusMX. values: la fila COMPLETA tal como la
     devuelve la tool recent_data (la marca de tiempo identifica el registro; la fecha en texto del principio se ignora).
     CumulusMX guarda esos valores con los decimales con que los muestra, así que un registro editado o restaurado queda con

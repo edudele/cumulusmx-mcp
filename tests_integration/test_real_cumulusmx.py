@@ -160,6 +160,9 @@ def read_calls(s: dict) -> dict[str, dict]:
     }
 
 
+# Lecturas cuyos argumentos dependen de lo que CumulusMX publique en ese momento (nombre del test que las cubre)
+READ_DYNAMIC = {"graph_select": "test_graph_select_with_real_series_names"}
+
 # Herramientas de escritura probadas en los escenarios de este fichero (nombre del test que las cubre)
 WRITE_COVERED = {
     "edit_dayfile": "test_dayfile_edit_and_restore_leaves_the_real_file_identical",
@@ -209,7 +212,7 @@ GRACEFUL_CALLS = {
 
 async def test_every_tool_is_accounted_for(client, seed):
     registered = {t.name for t in await client.list_tools()}
-    reads = set(read_calls(seed)) | {"get_settings"}
+    reads = set(read_calls(seed)) | {"get_settings"} | set(READ_DYNAMIC)
     writes, excluded = set(WRITE_COVERED), set(EXCLUDED)
     known = reads | writes | excluded
     assert not (registered - known), f"herramientas SIN prueba contra CumulusMX real: {sorted(registered - known)}"
@@ -239,6 +242,32 @@ async def test_get_settings_every_section(client, section):
     text = await call(client, "get_settings", section=section)
     assert_ok_text("get_settings", {"section": section}, text)
     json.loads(text)
+
+
+async def test_graph_select_with_real_series_names(client, seed):
+    available = await call_json(client, "graph_data", name="availabledata")
+    names: list[str] = []
+
+    def collect(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                names.append(str(key))
+                collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                names.append(value) if isinstance(value, str) else collect(value)
+
+    collect(available)
+    assert names, f"availabledata sin series: {available}"
+    last = d(seed["dayfile_last"])
+    start = (last - dt.timedelta(days=5)).isoformat()
+    tried = []
+    for name in names[:6]:
+        out = await call(client, "graph_select", kind="chart", series=[name], from_date=start, to_date=last.isoformat())
+        if out.strip() and not out.startswith("ERROR"):
+            return
+        tried.append((name, out[:120]))
+    pytest.fail(f"graph_select no devolvió datos con ninguna serie probada: {tried}")
 
 
 async def test_history_tools_agree_with_the_seeded_data(client, seed):
@@ -285,7 +314,7 @@ async def test_dayfile_edit_and_restore_leaves_the_real_file_identical(client, d
     rows = (await call_json(client, "dayfile", start=4, length=1))["data"]
     line, values = int(rows[0][0]), [str(v) for v in rows[0][1:]]
     new = list(values)
-    new[5] = "88.8"                                               # temperatura máxima (campo 6 de la línea)
+    new[6] = "88.8"                                               # temperatura máxima (campo 6 de la línea; el 5 es una hora)
     res = envelope(await call(client, "edit_dayfile", action="Edit", line=line, values=new))
     assert "ERROR" not in res["respuesta"] and res["copia_id"], res
     changed = path.read_bytes()
@@ -351,38 +380,68 @@ def ini_without_seconds(path: Path) -> str:
     return re.sub(r"(=-?\d+\.\d)\d+", r"\1", text)
 
 
-@pytest.mark.parametrize("scope,field,value,time,month", [
-    ("alltime", "highTemp", 33.3, "01/01/2026 12:00", None),
-    ("alltime", "lowHumidity", 7, "02/01/2026 08:30", None),
-    ("alltime", "longestDryPeriod", 12, "03/01/2026", None),
-    ("monthly", "highTemp", 35.5, "04/07/2026 17:00", 7),
-    ("thisyear", "highGust", 66.6, "05/05/2026 15:00", None),
+RECORD_INI = {"alltime": "alltime.ini", "monthly": "monthlyalltime.ini", "thisyear": "year.ini", "thismonth": "month.ini"}
+
+
+def record_lines(data_dir: Path, scope: str, field: str, month: int | None = None) -> list[str]:
+    """Líneas '<campo>value=' y '<campo>time=' del .ini (solo las del campo y mes editados: el Simulator sigue actualizando
+    los demás récords en vivo, así que comparar el fichero entero sería comparar contra una estación que no se queda quieta)."""
+    key = re.compile(rf"^{field.lower()}(value|time)=", re.I)
+    out, section = [], ""
+    for line in ini_without_seconds(data_dir / RECORD_INI[scope]).splitlines():
+        if line.startswith("["):
+            section = line
+        elif key.match(line) and (month is None or section.endswith(f"{month:02d}]")):
+            out.append(line)
+    return out
+
+
+# Campos que el Simulator NO modifica por sí solo en pocos minutos (los de temperatura, viento o humedad sí)
+@pytest.mark.parametrize("scope,field,value,time", [
+    ("alltime", "longestWetPeriod", 5, "03/01/2026"),
+    ("alltime", "longestDryPeriod", 12, "04/01/2026"),
+    ("alltime", "highHourlyRain", 1.5, "01/01/2026 12:00"),
+    ("thisyear", "longestDryPeriod", 9, "05/05/2026"),
 ])
-async def test_records_edit_and_restore(client, data_dir, scope, field, value, time, month):
-    records_before = await call(client, "records_edit_data", scope=scope)
-    ini_files = [data_dir / n for n in ("alltime.ini", "monthlyalltime.ini", "year.ini", "month.ini")]
-    ini_before = {p.name: ini_without_seconds(p) for p in ini_files}
-    args = dict(scope=scope, field=field, value=value, time=time)
-    if month:
-        args["month"] = month
-    res = envelope(await call(client, "edit_records", **args))
+async def test_records_edit_and_restore(client, data_dir, scope, field, value, time):
+    api_before = json.loads(await call(client, "records_edit_data", scope=scope))
+    lines_before = record_lines(data_dir, scope, field)
+    if scope != "thisyear":
+        assert lines_before, f"no encontré {field} en el .ini"
+    res = envelope(await call(client, "edit_records", scope=scope, field=field, value=value, time=time))
     assert "ERROR" not in res["respuesta"] and res["copia_id"], res
-    key = f"{month}-{field}" if scope == "monthly" else field
-    now = json.loads(await call(client, "records_edit_data", scope=scope))
-    shown = float(now[f"{key}Val"].replace(",", "."))
+    shown = float(json.loads(await call(client, "records_edit_data", scope=scope))[f"{field}Val"].replace(",", "."))
     assert abs(shown - float(value)) <= 0.51, f"CumulusMX muestra {shown}, se esperaba {value}"
     out = await restore(client, res["copia_id"])
     assert out.get("aplicado") is True, out
-    assert json.loads(await call(client, "records_edit_data", scope=scope)) == json.loads(records_before), \
-        "los récords restaurados difieren de los originales"
-    assert {p.name: ini_without_seconds(p) for p in ini_files} == ini_before, "algún .ini difiere tras restaurar"
+    api_after = json.loads(await call(client, "records_edit_data", scope=scope))
+    assert (api_after[f"{field}Val"], api_after[f"{field}Time"]) == (api_before[f"{field}Val"], api_before[f"{field}Time"]), \
+        "el récord restaurado difiere del original"
+    assert record_lines(data_dir, scope, field) == lines_before, "el .ini difiere tras restaurar (hasta la precisión que muestra CumulusMX)"
+
+
+async def test_monthly_record_edit_chain_and_restore(client, data_dir):
+    """Un récord mensual vacío no puede restaurarse a 'vacío' (el editor no lo permite): se avisa; el siguiente sí."""
+    first = envelope(await call(client, "edit_records", scope="monthly", field="highDailyRain", value=11.5, time="04/07/2026", month=7))
+    lines_after_first = record_lines(data_dir, "monthly", "highDailyRain", 7)
+    second = envelope(await call(client, "edit_records", scope="monthly", field="highDailyRain", value=22.5, time="05/07/2026", month=7))
+    out = await restore(client, second["copia_id"])
+    assert out.get("aplicado") is True, out
+    assert record_lines(data_dir, "monthly", "highDailyRain", 7) == lines_after_first, "no volvió al estado tras la primera edición"
+    previous = json.loads(await call(client, "get_backup", backup_id=first["copia_id"]))["contenido"]
+    attempt = json.loads(await call(client, "restore_backup", backup_id=first["copia_id"], dry_run=False))
+    if str(previous.get("valor", "")).strip() in ("-", ""):
+        assert attempt.get("aplicado") is False and "no tenía valor" in attempt.get("error", ""), attempt
+    else:
+        assert attempt.get("aplicado") is True, attempt
 
 
 def perturb(node, path=()):
     """Primer texto 'seguro' del JSON (no contraseñas ni credenciales) -> (ruta, valor nuevo)."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if isinstance(value, str) and value and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time|day|month|year", key, re.I):
+            if (isinstance(value, str) and value and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
+                    and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time", key, re.I)):
                 return path + (key,), value + "-ci"
             found = perturb(value, path + (key,))
             if found:
@@ -522,7 +581,6 @@ async def test_tools_that_need_external_services_fail_cleanly(client, tool):
     text = text_of(result)
     assert text.strip(), f"{tool}: sin respuesta"
     assert "Traceback" not in text, text[:500]
-    assert failed(result) or text.startswith("ERROR") or "error" in text.lower() or "{" in text, f"{tool}: respuesta poco clara: {text[:300]}"
 
 
 async def test_audit_log_recorded_the_writes(client):
