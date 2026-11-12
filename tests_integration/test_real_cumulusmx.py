@@ -812,9 +812,16 @@ async def wait_for_files(folder, pattern: str, seconds: int = 60) -> list:
 
 
 async def test_uploads_through_a_real_ftp_server(client, ftp_server, seed):
+    current = json.loads(await call(client, "get_settings", section="internet"))
+    interval = current["websettings"]["interval"]
+    for group in ("stdfiles", "graphfiles"):            # en una instalación nueva ningún fichero se sube por FTP
+        for item in interval[group]["files"]:
+            item["create"], item["ftp"] = True, True
     res = json.loads(await call(client, "update_settings", section="internet", dry_run=False, settings={
         "website": {"enabled": True, "hostname": "127.0.0.1", "ftpport": 2121, "sslftp": 0, "directory": "/",
-                    "username": "ci", "password": "ci", "advanced": {"activeftp": False}}}))
+                    "username": "ci", "password": "ci", "advanced": {"activeftp": False}},
+        "websettings": {"interval": {"enabled": True, "enableintervalftp": True, "stdfiles": interval["stdfiles"],
+                                     "graphfiles": interval["graphfiles"]}}}))
     assert res.get("aplicado") is True, res
     last = d(seed["dayfile_last"])
     assert_ok_text("generate_reports", {}, await call(client, "generate_reports", report_type="month", year=last.year,
