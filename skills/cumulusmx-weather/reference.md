@@ -101,10 +101,10 @@ warning, and `aplicado` is `false` if none was stored.
 | `clear_alarms` | `alarm` name (for example `BatteryLow`, `Sensor`) or `all` (default). |
 | `clear_error_log` | Deletes the CumulusMX error log. Read it with `get_error_log` first. |
 | `purgemysql` | Purges the MySQL pending/failed command queue and cache. |
-| `trigger_ftp` | Immediate upload. Booleans `dailygraphs`, `noaa`, `graphs`, `logfiles`. |
+| `trigger_ftp` | Immediate upload. Booleans `dailygraphs`, `noaa`, `graphs`, `logfiles`. Only the web files marked for FTP in the internet settings are uploaded. |
 | `generate_reports` | `report_type` `year` or `month`, `year`, `month` (default: current). Creates files on the server. |
 | `upload_reports` | Uploads NOAA reports with the same arguments as `generate_reports`. |
-| `test_email` | `from_email`, `dest_email`, optional `use_html`, `use_bcc`. Sends a real test email to check alarm SMTP settings. |
+| `test_email` | `from_email`, `dest_email`, optional `use_html`, `use_bcc`. Sends a real test email to check alarm SMTP settings; if e-mail is not configured the answer says so. |
 | `edit_current_conditions` | Sets the current-conditions text. |
 | `edit_rain_today` | `raintoday`, optional `midnightrain` and `rainratetoday` (the current values are kept when omitted). Verifies that CumulusMX applied it (it silently ignores partial requests) and backs up the previous values (`kind="rain"`, restorable). |
 | `edit_diary` | Creates or updates a diary entry with observations and snow/storm flags. |
@@ -130,14 +130,14 @@ container user), the write is refused and nothing is changed; `CUMULUS_BACKUP_DI
 | `edit_dayfile` | `action` (`Edit` or `Delete`), `line` (1-based, the first value returned by `dayfile`), `values` (the fields of that `dayfile.txt` line, date `dd/MM/yy` first, without the line number). CumulusMX checks the date matches. Also updates SQLite and, if enabled, MySQL. |
 | `edit_datalog` | `action`, `line` (1-based within the month's log), `values` (all fields; the second one is the Unix `TS` that selects the file), `extra` (true for the extra-sensor log). |
 | `edit_recent_data` | `action`, `values` (the whole row as returned by `recent_data`; the text date at the start is ignored because CumulusMX expects the timestamp first). CumulusMX stores the values with the decimals it displays, so an edited or restored record keeps that precision. |
-| `edit_mysql_cache` | `action`, `keys`, `statements` (one per key, for `Edit`). |
+| `edit_mysql_cache` | `action`, `keys`, `statements` (one per key, for `Edit`). Refused while the cache holds commands that failed to *connect* (key 0): CumulusMX keeps those only in memory and its editor would discard them all; restore the connection or use `purgemysql`. The change is read back and an `ERROR` is returned if it is not there. |
 | `edit_records` | `scope` (`alltime`, `monthly` with `month` 1-12, `thismonth`, `thisyear`), `field` (e.g. `highTemp`, `lowTemp`, `highGust`, `highDailyRain`, `highMonthlyRain`, `longestDryPeriod`, `highWbgt`; `highMonthlyRain` does not exist for `thismonth`), `value`, `time` (`dd/MM/yyyy HH:mm`, `dd/MM/yyyy` for daily records, `MMM yyyy` for monthly rain). The value is sent with the station's decimal separator; `highHumidity`, `lowHumidity`, `longestDryPeriod` and `longestWetPeriod` are whole numbers and are sent without decimals. The time is stored to the minute. |
 
 ### Undo
 
 | Tool | Effect |
 |---|---|
-| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup), a day-file or interval-log line, a recent-data record, a MySQL-cache statement, today's rain or a record (previous value and time), as long as the original write was an *Edit*. The answer includes `aplicado`; a record that had no value or date cannot be restored to "unset" and is explained. A *Delete* cannot be re-inserted (CumulusMX has no such action): `get_backup` shows what was lost. The restore creates its own backup, so it can be undone too. |
+| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup; if a disabled service kept newer fields it is restored in two steps, see `pasos`), a day-file or interval-log line, a recent-data record, a MySQL-cache statement, today's rain or a record (previous value and time), as long as the original write was an *Edit*. The answer includes `aplicado`; a record that had no value or date cannot be restored to "unset" and is explained. A *Delete* cannot be re-inserted (CumulusMX has no such action): `get_backup` shows what was lost. The restore creates its own backup, so it can be undone too. |
 
 `edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_mysql_cache` and `edit_records` return JSON with `respuesta` (CumulusMX's answer) and `copia_id`. `edit_mysql_cache` Edit takes exactly one key and one statement; Delete reads the statements from the cache itself.
 
