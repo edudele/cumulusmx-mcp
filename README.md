@@ -147,6 +147,10 @@ See [`.env.example`](.env.example) for all variables.
 
 Keep the server behind HTTPS (a reverse proxy) when it is reachable from outside your network.
 
+To try the write tools without risking your real station, run them against a **copy** of it: see
+[`deploy/sandbox/`](deploy/sandbox/README.md) (isolated Docker network, Simulator station, separate token; in Spanish).
+If backups are enabled but cannot be written, the MCP refuses to change anything and says why.
+
 ---
 
 ## Health check

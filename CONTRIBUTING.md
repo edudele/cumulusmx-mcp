@@ -44,3 +44,4 @@ exact commit being released, so push the commit to a branch and wait for CI befo
 Never point a test MCP at the production CumulusMX. Run a second CumulusMX with a *copy* of your data and, in that copy, disable
 every upload (FTP, MQTT, MySQL, third-party services, external programs) or point MySQL at a separate database. Give the MCP
 container a data volume its user can write to, otherwise edits are refused because their backup cannot be saved.
+Step by step, with a compose example: [`deploy/sandbox/README.md`](deploy/sandbox/README.md) (in Spanish).

@@ -40,6 +40,9 @@ technical gate in `release.yml`).
 - `tests_integration/` and the `Integration (real CumulusMX)` workflow, and a technical gate in `release.yml`: no tag, image or PyPI
   upload is produced unless `tests.yml` and `integration.yml` are green for that exact commit.
 
+- `deploy/sandbox/`: how to test the write tools against a *copy* of your own station (isolated Docker network, Simulator
+  station, separate MCP token and a data volume the container user can write to), with a compose example.
+
 ### Known limits of CumulusMX (documented, not fixable from the client)
 - Recent-data edits are stored with the decimals the API displays; CumulusMX copies BGT into WBGT on that path (upstream bug).
 - Record times are stored to the minute; unset records cannot be restored to "unset".

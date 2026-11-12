@@ -1,0 +1,59 @@
+# Sandbox de CumulusMX: una COPIA de tu estación para probar escrituras (edit_dayfile, edit_records, update_settings...)
+# sin tocar la estación real. Léelo junto a deploy/sandbox/README.md.
+#
+# Adapta las rutas (/docker/cumulusmxro/...) y los nombres. Variables en un fichero .env junto a este compose:
+#   PUID, PGID               usuario dueño de los ficheros de la copia
+#   MCP_SANDBOX_TOKEN        token del MCP de pruebas (DISTINTO del de producción: `openssl rand -hex 32`)
+#
+# Arranque:   docker compose -f docker-compose.example.yml up -d
+# Reinicio a cero: docker compose stop cumulusmxro; vuelve a copiar los datos (ver README); docker compose start cumulusmxro
+
+services:
+  cumulusmxro:
+    container_name: cumulusmxro
+    image: hucknz/cumulusmx:latest          # la MISMA imagen que la estación real (mismo CumulusMX, mismo locale)
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=Europe/Madrid
+      - LANG=es_ES.UTF-8                    # el mismo locale que la real: decide la coma decimal y los formatos de fecha
+      - LANGUAGE=es_ES:es
+      - LC_ALL=es_ES.UTF-8
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /docker/cumulusmxro/data:/opt/CumulusMX/data
+      - /docker/cumulusmxro/backup:/opt/CumulusMX/backup
+      - /docker/cumulusmxro/MXdiags:/opt/CumulusMX/MXdiags
+      - /docker/cumulusmxro/config:/opt/CumulusMX/config
+      - /docker/cumulusmxro/reports:/opt/CumulusMX/Reports
+      # A propósito NO se montan cron/, utils/, mqtt/ ni publicweb/ de la estación real: son los scripts y las plantillas
+      # que suben o publican datos.
+    networks:
+      - sandbox                             # SOLO la red interna (sin salida a Internet ni a tu red local)
+
+  mcp-sandbox:
+    container_name: cumulusmx-mcp-sandbox
+    image: edudele/cumulusmx-mcp:1.8.2      # fija la versión; ":latest" cambia sin avisar
+    restart: unless-stopped
+    user: "1000:1000"                       # el usuario de abajo debe poder escribir en la carpeta de datos (ver README)
+    environment:
+      CUMULUSMX_URL: "http://cumulusmxro:8998"
+      MCP_AUTH_TOKEN: ${MCP_SANDBOX_TOKEN}
+      PORT: "8801"
+      CUMULUS_TIMEZONE: "Europe/Madrid"
+      ENABLE_WRITE_TOOLS: "true"
+    volumes:
+      - /docker/cumulusmxro/mcp-data:/data  # copias previas a cada escritura + auditoría; `chown 1000:1000` esta carpeta
+    ports:
+      - "8801:8801"                         # el conector "sandbox" de Claude apunta aquí
+    networks:
+      - sandbox                             # para hablar con cumulusmxro
+      - default                             # para que Claude (o tu proxy inverso) llegue al MCP
+
+networks:
+  sandbox:
+    internal: true                          # imprescindible: la copia lleva las claves reales de FTP/MQTT/MySQL/correo/WU...
+  default:
+    name: edudele_ha                        # tu red externa de siempre; cámbiala por la tuya
+    external: true
