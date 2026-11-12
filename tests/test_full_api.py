@@ -527,9 +527,10 @@ class TestDataEditors:
             assert p.await_args.args[0] == "/api/edit/datalogs"
             assert json.loads(p.await_args.kwargs["content"]) == {
                 "action": "Delete", "lines": [12], "extra": True, "data": [["24/08/19", "1566644400", "10,5"]]}
-            await server.edit_recent_data("Edit", ["a", 1, 2.5])
+            row = ["1566640800", *["1.5"] * 25, None]
+            await server.edit_recent_data("Edit", ["24/08/19 10:00", *row])     # la fecha en texto se descarta
             assert p.await_args.args[0] == "/api/edit/recentdata"
-            assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "data": [["a", "1", "2.5"]]}
+            assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "data": [[*row[:-1], "null"]]}
             await server.edit_mysql_cache("Edit", [7], ["INSERT 1"])
             assert p.await_args.args[0] == "/api/edit/mysqlcache"
             assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "keys": [7], "statements": ["INSERT 1"]}
@@ -548,6 +549,8 @@ class TestDataEditors:
             await server.edit_datalog("Edit", 1, [])
         with pytest.raises(ValueError):
             await server.edit_recent_data("Edit", [])
+        with pytest.raises(ValueError, match="fila completa"):
+            await server.edit_recent_data("Edit", ["24/08/19 10:00", "1566640800", "88,8"])
         with pytest.raises(ValueError):
             await server.edit_mysql_cache("Edit", [], None)
         with pytest.raises(ValueError, match="exactamente 1 clave"):

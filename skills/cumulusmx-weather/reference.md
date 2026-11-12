@@ -126,9 +126,9 @@ and change nothing.
 |---|---|
 | `edit_dayfile` | `action` (`Edit` or `Delete`), `line` (1-based, the first value returned by `dayfile`), `values` (the fields of that `dayfile.txt` line, date `dd/MM/yy` first, without the line number). CumulusMX checks the date matches. Also updates SQLite and, if enabled, MySQL. |
 | `edit_datalog` | `action`, `line` (1-based within the month's log), `values` (all fields; the second one is the Unix `TS` that selects the file), `extra` (true for the extra-sensor log). |
-| `edit_recent_data` | `action`, `values` (CSV fields of the record, as in `recent_data`). |
+| `edit_recent_data` | `action`, `values` (the whole row as returned by `recent_data`; the text date at the start is ignored because CumulusMX expects the timestamp first). CumulusMX stores the values with the decimals it displays, so an edited or restored record keeps that precision. |
 | `edit_mysql_cache` | `action`, `keys`, `statements` (one per key, for `Edit`). |
-| `edit_records` | `scope` (`alltime`, `monthly` with `month` 1-12, `thismonth`, `thisyear`), `field` (e.g. `highTemp`, `lowTemp`, `highGust`, `highDailyRain`, `highMonthlyRain`, `longestDryPeriod`, `highWbgt`; `highMonthlyRain` does not exist for `thismonth`), `value`, `time` (`dd/MM/yyyy HH:mm`, `dd/MM/yyyy` for daily records, `MMM yyyy` for monthly rain). The value is sent with the station's decimal separator. |
+| `edit_records` | `scope` (`alltime`, `monthly` with `month` 1-12, `thismonth`, `thisyear`), `field` (e.g. `highTemp`, `lowTemp`, `highGust`, `highDailyRain`, `highMonthlyRain`, `longestDryPeriod`, `highWbgt`; `highMonthlyRain` does not exist for `thismonth`), `value`, `time` (`dd/MM/yyyy HH:mm`, `dd/MM/yyyy` for daily records, `MMM yyyy` for monthly rain). The value is sent with the station's decimal separator; `highHumidity`, `lowHumidity`, `longestDryPeriod` and `longestWetPeriod` are whole numbers and are sent without decimals. The time is stored to the minute. |
 
 ### Undo
 

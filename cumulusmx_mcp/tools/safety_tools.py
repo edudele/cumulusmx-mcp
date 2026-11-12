@@ -48,7 +48,7 @@ def _plan(record: dict) -> tuple[str, dict, object] | tuple[str, None, str]:
         return "edit_datalog", {"action": "Edit", "line": line, "extra": extra, "values": values}, \
             lambda dry: editors._edit_datalog("Edit", line, values, extra)
     if kind == "recent" and content.get("row"):
-        values = [str(v) for v in content["row"]]
+        values = ["null" if v is None else str(v) for v in content["row"]]
         return "edit_recent_data", {"action": "Edit", "values": values}, lambda dry: editors._edit_recent("Edit", values)
     if kind == "mysqlcache" and len(content.get("items", [])) == 1:
         item = content["items"][0]

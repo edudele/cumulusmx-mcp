@@ -6,6 +6,7 @@ comprobación de fechas al editar el dayfile... Así los tests detectan errores 
 Mantiene estado en memoria (ajustes, dayfile, récords) y registra las peticiones recibidas.
 """
 import json
+import re
 import urllib.parse
 from typing import Any
 
@@ -40,18 +41,24 @@ class FakeCumulus:
             [2, "25/08/19", "19.0", "138", "14:20", "15.4"],
         ]
         self.records: dict[str, dict[str, tuple[float, str]]] = {
-            "alltime": {"highTemp": (34.6, "25/07/2019 15:39")}, "monthly": {"7-highTemp": (33.0, "10/07/2019 15:00")},
+            "alltime": {"highTemp": (34.6, "25/07/2019 15:39"), "lowHumidity": (6, "14/09/2024 16:45")}, "monthly": {"7-highTemp": (33.0, "10/07/2019 15:00")},
             "thismonth": {}, "thisyear": {}}
         # logs de intervalo: [nº de línea, DateTime, TS, ...]; datos recientes: [DateTime, TS, ...]; caché MySQL: [clave, sentencia]
         self.datalogs = {False: [[1, "24/08/19 10:00", "1566640800", "10,5", "60"],
                                  [2, "24/08/19 10:10", "1566641400", "10,7", "61"]], True: []}
-        self.recent = [["24/08/19 10:00", "1566640800", "10,5"], ["24/08/19 10:10", "1566641400", "10,7"]]
+        self.recent = [self._recent_row("24/08/19 10:00", 1566640800, 10.5), self._recent_row("24/08/19 10:10", 1566641400, 10.7)]
         self.mysqlcache = [[7, "INSERT INTO Monthly VALUES (1)"], [8, "INSERT INTO Monthly VALUES (2)"]]
         self.temp = "10,0" if decimal_comma else "10.0"
         self.created_tables: list[str] = []
         self.sql_posts: list[str] = []
 
     # ---- helpers
+    @staticmethod
+    def _recent_row(date: str, ts: int, temp: float) -> list:
+        """Fila como la devuelve /api/data/recentdata (RecentData.ToCsv): fecha en texto, marca de tiempo y 26 valores."""
+        return [date, ts, 3, 9, 1, 343, 163, temp, 7.7, 1.8, 7.7, 7.7, 7.7, 5.5, 66, 1016.0, 0.0, 0.0, 584.4032, 228, 370, 2.0,
+                22.5, 39, -1.0, -1.0, None, None]
+
     def _json(self, obj: Any, status: int = 200) -> Response:
         return Response(json.dumps(obj), status_code=status, media_type="application/json")
 
@@ -132,8 +139,13 @@ class FakeCumulus:
             self.requests.append(("POST", f"/api/edit/{scope}", body))
             text = urllib.parse.unquote(body)                   # Uri.UnescapeDataString: no convierte '+'
             field, txt_value, txt_time = (p.split("=", 1)[1] for p in text.split("&")[:3])
-            # double.Parse con cultura regional: con coma decimal "34.6" se leería como 346 (el punto es separador de miles)
-            value = float(txt_value.replace(".", "").replace(",", ".")) if self.decimal_comma else float(txt_value)
+            if field.split("-")[-1] in ("highHumidity", "lowHumidity", "longestDryPeriod", "longestWetPeriod"):
+                if not re.fullmatch(r"-?\d+", txt_value):          # int.Parse: "23.0" / "23,0" -> FormatException -> 500
+                    return Response("FormatException: input string was not in a correct format", status_code=500)
+                value = int(txt_value)
+            else:
+                # double.Parse con cultura regional: con coma decimal "34.6" se leería como 346 (el punto es separador de miles)
+                value = float(txt_value.replace(".", "").replace(",", ".")) if self.decimal_comma else float(txt_value)
             self.records[scope][field] = (value, txt_time.replace("+", " "))
             return PlainTextResponse("Data updated")
         return route
@@ -142,7 +154,8 @@ class FakeCumulus:
         async def route(request: Request) -> Response:
             out: dict[str, str] = {}
             for field, (value, time) in self.records[scope].items():
-                out[f"{field}Val"], out[f"{field}Time"] = self._fmt(value), time
+                out[f"{field}Val"] = str(value) if isinstance(value, int) else self._fmt(value)
+                out[f"{field}Time"] = time
             return self._json(out)
         return route
 
@@ -184,11 +197,24 @@ class FakeCumulus:
         self.requests.append(("POST", "/api/edit/recentdata", body))
         new = json.loads(body)
         row = new["data"][0]
-        found = next((i for i, r in enumerate(self.recent) if str(r[1]) == str(row[1])), None)
+        try:                                                  # RecentData.FromCsvArray: csv[0] es la marca de tiempo (long.Parse)
+            timestamp = int(row[0])
+        except ValueError:
+            return self._json({"errors": {"RecentData": ["Failed to update SQLite"]}}, 500)
+        if len(row) < 25:
+            return self._json({"errors": {"RecentData": ["Failed to update SQLite"]}}, 500)
+        found = next((i for i, r in enumerate(self.recent) if r[1] == timestamp), None)
         if found is None:
             return self._json({"errors": {"Recent": ["no existe"]}}, 500)
         if new["action"] == "Edit":
-            self.recent[found] = row
+            def conv(v):
+                if v == "null":
+                    return None
+                try:
+                    return int(v)
+                except ValueError:
+                    return float(v)
+            self.recent[found] = [self.recent[found][0], *[conv(v) for v in row]]
         else:
             del self.recent[found]
         return self._json({"errors": None})

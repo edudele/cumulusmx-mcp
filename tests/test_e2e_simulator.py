@@ -156,10 +156,43 @@ class TestBackupsAndRestore:
 
     @pytest.mark.asyncio
     async def test_recent_data_edit_is_backed_up_and_restored(self, sim):
-        res = json.loads(await server.edit_recent_data("Edit", ["24/08/19 10:00", "1566640800", "88,8"]))
-        assert sim.recent[0][2] == "88,8"
+        original = list(sim.recent[0])
+        edited = list(original)
+        edited[7] = 88.8                                                   # fila completa, con la fecha en texto delante
+        res = json.loads(await server.edit_recent_data("Edit", edited))
+        assert "ERROR" not in res["respuesta"] and sim.recent[0][7] == 88.8
         await server.restore_backup(res["copia_id"], dry_run=False)
-        assert sim.recent[0] == ["24/08/19 10:00", "1566640800", "10,5"]
+        assert sim.recent[0] == original                                   # idéntico: fecha, nulos y decimales incluidos
+
+    @pytest.mark.asyncio
+    async def test_recent_data_edit_accepts_the_row_without_the_text_date(self, sim):
+        original = list(sim.recent[1])
+        edited = [*original[1:]]
+        edited[6] = 77.7
+        res = json.loads(await server.edit_recent_data("Edit", edited))
+        assert "ERROR" not in res["respuesta"] and sim.recent[1][7] == 77.7 and sim.recent[1][0] == original[0]
+        await server.restore_backup(res["copia_id"], dry_run=False)
+        assert sim.recent[1] == original
+
+    @pytest.mark.asyncio
+    async def test_recent_data_edit_with_a_truncated_row_sends_nothing(self, sim):
+        with pytest.raises(ValueError):
+            await server.edit_recent_data("Edit", ["24/08/19 10:00", "1566640800", "88,8"])
+        assert not posts(sim, "/api/edit/recentdata")
+
+    @pytest.mark.asyncio
+    async def test_integer_records_are_sent_as_integers(self, sim):
+        res = json.loads(await server.edit_records("alltime", "lowHumidity", 7, "15/09/2024 10:00"))
+        assert "ERROR" not in res["respuesta"] and sim.records["alltime"]["lowHumidity"] == (7, "15/09/2024 10:00")
+        assert "value=7&" in posts(sim, "/api/edit/alltime")[-1][2]
+        await server.restore_backup(res["copia_id"], dry_run=False)
+        assert sim.records["alltime"]["lowHumidity"] == (6, "14/09/2024 16:45")
+
+    @pytest.mark.asyncio
+    async def test_integer_records_reject_decimals_before_sending(self, sim):
+        with pytest.raises(ValueError, match="entero"):
+            await server.edit_records("alltime", "lowHumidity", 7.5, "15/09/2024 10:00")
+        assert not posts(sim, "/api/edit/alltime")
 
     @pytest.mark.asyncio
     async def test_mysql_cache_edit_is_backed_up_and_restored(self, sim):

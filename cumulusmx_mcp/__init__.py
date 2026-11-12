@@ -17,7 +17,7 @@ Estructura del paquete (de abajo arriba; cada capa solo importa las anteriores):
     cli              arranque (HTTP o stdio)
 """
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 
 import os as _os
 

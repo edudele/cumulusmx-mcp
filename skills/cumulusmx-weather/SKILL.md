@@ -4,7 +4,7 @@ description: Answer questions about a home weather station running CumulusMX thr
 license: MIT
 compatibility: Requires the cumulusmx-mcp MCP server (github.com/edudele/cumulusmx-mcp) connected to a reachable CumulusMX instance.
 metadata:
-  version: "1.8.0"
+  version: "1.8.1"
   server: cumulusmx-mcp
 ---
 

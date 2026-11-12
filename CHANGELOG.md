@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.8.1]
+
+### Fixed
+Found while preparing a round-trip test against a real station, by reading the CumulusMX source. Both errors made the request fail with
+an HTTP 500 before anything was modified; the test simulator was not as strict as the real server and did not catch them.
+- `edit_recent_data` sent the row as `recent_data` returns it, with the text date first. CumulusMX parses the first field as the
+  timestamp, so every edit (and every restore of a recent-data backup) failed. The text date is now dropped, incomplete rows are
+  rejected before sending, and `null` values are sent as `null`.
+- `edit_records` sent whole-number records with a decimal part (`23.0`), which CumulusMX reads with `int.Parse`. `highHumidity`,
+  `lowHumidity`, `longestDryPeriod` and `longestWetPeriod` are now sent as integers, and a value with decimals is refused.
+
+### Changed
+- Documented two limits of CumulusMX's editors that no client can avoid: recent-data values are stored with the decimals the API
+  displays, and record times are stored to the minute.
+- The test simulator now reproduces both server behaviours.
+
 ## [1.8.0]
 
 ### Added

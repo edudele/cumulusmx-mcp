@@ -83,22 +83,41 @@ async def edit_datalog(action: Literal["Edit", "Delete"], line: int, values: lis
     return await _edit_datalog(action, line, values, extra)
 
 
+RECENT_MIN_FIELDS = 25      # RecentData.FromCsvArray de CumulusMX rechaza menos campos (la fila completa lleva 27 tras la fecha)
+
+
+def _recent_row(values: list) -> list[str]:
+    """Campos que espera el editor de CumulusMX: empiezan por la marca de tiempo (RecentData.FromCsvArray).
+
+    `recent_data` devuelve la fecha en texto ("05/11/26 11:00") delante de la marca de tiempo; esa fecha es solo para mostrar
+    y el servidor la rechaza (long.Parse), así que se descarta si viene. Un None se envía como "null", igual que lo escribe
+    CumulusMX."""
+    row = ["null" if v is None else str(v) for v in values]
+    if row and not row[0].strip().lstrip("-").isdigit():
+        row = row[1:]
+    if len(row) < RECENT_MIN_FIELDS or not row[0].strip().isdigit():
+        raise ValueError("values debe ser la fila completa de recent_data (fecha opcional, marca de tiempo y al menos "
+                         f"{RECENT_MIN_FIELDS - 1} valores más); no se envía nada")
+    return row
+
+
 async def _edit_recent(action: str, values: list[str]) -> str:
     _check_action(action)
-    if len(values) < 2:
-        raise ValueError("values debe incluir al menos la fecha y la marca de tiempo del registro")
-    payload = _editor_payload(action, data=[[str(v) for v in values]])
-    row = await capture.recent_row(str(values[1])) if backups.enabled() else None
-    backup_id = backups.save("recent", str(values[1]), {"row": row, "accion": action}, "edit_recent_data") if row else None
+    sent = _recent_row(values)
+    timestamp = sent[0].strip()
+    payload = _editor_payload(action, data=[sent])
+    row = await capture.recent_row(timestamp) if backups.enabled() else None
+    backup_id = backups.save("recent", timestamp, {"row": row, "accion": action}, "edit_recent_data") if row else None
     response = await client._post("/api/edit/recentdata", content=payload, headers=settings_engine.JSON_HEADERS)
     return _envelope(response, backup_id, "el registro")
 
 
 @write_tool
 async def edit_recent_data(action: Literal["Edit", "Delete"], values: list[str]) -> str:
-    """Edita o borra un registro de la tabla de datos recientes (SQLite) de CumulusMX. values: los campos del registro en
-    el orden de la tool recent_data (el segundo, la marca de tiempo, identifica el registro). Guarda antes una copia del
-    registro original (copia_id; restaurable si fue una edición)."""
+    """Edita o borra un registro de la tabla de datos recientes (SQLite) de CumulusMX. values: la fila COMPLETA tal como la
+    devuelve la tool recent_data (la marca de tiempo identifica el registro; la fecha en texto del principio se ignora).
+    CumulusMX guarda esos valores con los decimales con que los muestra, así que un registro editado o restaurado queda con
+    esa precisión. Guarda antes una copia del registro original (copia_id; restaurable si fue una edición)."""
     return await _edit_recent(action, values)
 
 
@@ -154,6 +173,10 @@ RECORD_EDIT_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+# CumulusMX lee estos récords con int.Parse: "23.0" o "23,0" dan error 500, hay que enviar "23"
+INTEGER_RECORD_FIELDS = frozenset({"highHumidity", "lowHumidity", "longestDryPeriod", "longestWetPeriod"})
+
+
 async def _station_decimal_separator() -> str:
     """Separador decimal que usa la estación (CumulusMX parsea los valores editados con su cultura regional)."""
     text = await client._get("/api/tags/process.json?temp")
@@ -169,9 +192,14 @@ async def _edit_records(scope: str, field: str, value: float, time: str, month: 
         raise ValueError(f"field '{field}' no válido para {scope}. Válidos: {list(RECORD_EDIT_FIELDS[scope])}")
     if scope == "monthly" and not (month and 1 <= month <= 12):
         raise ValueError("scope='monthly' requiere month entre 1 y 12")
-    sep = await _station_decimal_separator()
+    if field in INTEGER_RECORD_FIELDS:
+        if float(value) != int(value):
+            raise ValueError(f"'{field}' es un número entero (CumulusMX no admite decimales): {value}")
+        text_value = str(int(value))
+    else:
+        text_value = str(value).replace(".", await _station_decimal_separator())
     name = f"{month}-{field}" if scope == "monthly" else field
-    body = f"name={name}&value={str(value).replace('.', sep)}&time={urllib.parse.quote_plus(time)}"
+    body = f"name={name}&value={text_value}&time={urllib.parse.quote_plus(time)}"
     backup_id = None
     if backups.enabled():
         before = await client._get(f"/api/edit/{scope}records.json")
