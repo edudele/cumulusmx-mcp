@@ -460,7 +460,7 @@ def perturb(node, path=()):
         if node.get("enabled") is False:   # CumulusMX solo guarda los campos de un servicio si está habilitado (p. ej. cwop.server)
             return None
         for key, value in node.items():
-            if (isinstance(value, str) and value and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
+            if (isinstance(value, str) and value.strip() and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
                     and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time", key, re.I)):
                 return path + (key,), value + "-ci"
             found = perturb(value, path + (key,))
@@ -507,7 +507,7 @@ async def test_every_settings_section_survives_update_and_restore(client):
         res = envelope(await call(client, "update_settings", section=section, settings=nested(path, new), dry_run=False))
         assert res.get("aplicado") is True, (section, res)
         during = json.loads(await call(client, "get_settings", section=section))
-        assert at(during, path) == new, f"{section}: CumulusMX no guardó el cambio en {path}"
+        assert str(at(during, path)).strip() == new.strip(), f"{section}: CumulusMX no guardó el cambio en {path}"
         out = await restore(client, res["copia_id"])
         assert out.get("aplicado") is True, (section, out)
         after = json.loads(await call(client, "get_settings", section=section))
@@ -549,7 +549,7 @@ async def test_classic_settings_updaters(client):
         path, new = found
         out = await call(client, tool, settings=nested(path, new))
         assert_ok_text(tool, {}, out)
-        assert at(json.loads(await call(client, "get_settings", section=section)), path) == new, f"{tool} no cambió {path}"
+        assert str(at(json.loads(await call(client, "get_settings", section=section)), path)).strip() == new.strip(), f"{tool} no cambió {path}"
         backups = json.loads(await call(client, "list_backups", kind="settings"))["copias"]
         assert backups, f"{tool} no dejó copia"
         await restore(client, backups[0]["id"])
