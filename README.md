@@ -154,7 +154,7 @@ Keep the server behind HTTPS (a reverse proxy) when it is reachable from outside
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.8.1"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.8.2"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.

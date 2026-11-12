@@ -51,7 +51,7 @@ async def call_json(mcp_client: Client, tool: str, /, **args):
 
 def blank_as_none(node):
     """Normalizaciones propias de CumulusMX al guardar ajustes (no del MCP), para comparar antes y después:
-    un texto vacío o un espacio se guarda como null, y `summer10am` (solo tiene sentido con cambio de día a las 9) pasa a false
+    un texto vacío o un espacio se guarda como null, los espacios al final de un texto se recortan, y `summer10am` (solo tiene sentido con cambio de día a las 9) pasa a false
     cuando el cambio de día es a medianoche."""
     if isinstance(node, dict):
         out = {k: blank_as_none(v) for k, v in node.items()}
@@ -60,7 +60,9 @@ def blank_as_none(node):
         return out
     if isinstance(node, list):
         return [blank_as_none(v) for v in node]
-    return None if isinstance(node, str) and not node.strip() else node
+    if isinstance(node, str):
+        return node.strip() or None         # además recorta los espacios finales de sus textos (p. ej. los de idioma)
+    return node
 
 
 def assert_ok_text(name: str, args: dict, text: str):

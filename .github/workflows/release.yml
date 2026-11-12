@@ -20,6 +20,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: release      # solo trazabilidad: el entorno no tiene reglas de aprobación
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,6 +44,24 @@ jobs:
             echo "El tag v$VERSION ya existe" >&2
             exit 1
           fi
+
+      - name: Technical gate (tests and real-CumulusMX integration must be green for this exact commit)
+        # Sin aprobaciones manuales: la garantía es técnica. Se publica solo si este commit ya pasó la suite de pruebas y la
+        # integración contra un CumulusMX REAL (workflows tests.yml e integration.yml, que se ejecutan al subir la rama).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for wf in tests.yml integration.yml; do
+            green=$(gh api "repos/${{ github.repository }}/actions/workflows/$wf/runs?head_sha=$SHA&per_page=50" \
+              --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion == "success")] | length')
+            echo "$wf: $green ejecuciones en verde para $SHA"
+            if [ "$green" -lt 1 ]; then
+              echo "No se publica: $wf no tiene ninguna ejecución en verde para el commit $SHA (sube el commit a una rama y espera a CI)" >&2
+              exit 1
+            fi
+          done
 
       - name: Extract release notes from CHANGELOG
         env:

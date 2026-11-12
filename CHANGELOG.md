@@ -5,6 +5,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.8.2]
+
+The MCP is now tested end to end against a **real CumulusMX** (official build 5026 with its Simulator station, locale `es-ES`), not
+only against the hand-written fake server: every tool is called, every edit is undone with `restore_backup`, and the real files
+are compared byte by byte. That harness found the problems below. A release is only published when that suite is green (see the
+technical gate in `release.yml`).
+
+### Fixed
+- **`edit_rain_today` never worked.** CumulusMX needs three fields (`raintoday`, `midnightrain`, `rainratetoday`); with fewer it
+  silently changes nothing and answers 200. The tool now reads the current values, sends all three, verifies the result and
+  returns `ERROR` if CumulusMX did not apply it. New optional argument `rainratetoday`; the previous values are backed up
+  (`kind="rain"`) and restorable.
+- **`edit_recent_data` multiplied some values by 10 on stations with a decimal comma.** CumulusMX reads UV, indoor temperature,
+  particulates and BGT/WBGT with the system culture, so `20.9` became `209`. Those fields are now sent with the station's decimal
+  separator.
+- **`edit_records` could say success without changing anything** (CumulusMX answers 200 for a date it does not understand). The
+  record is now read back and an `ERROR` is returned if it did not change.
+- **An edit could be applied with no way to undo it.** If backups are enabled but cannot be written (for example a volume the
+  container user cannot write to), the MCP used to apply the change and only warn. It now refuses to write and says why;
+  `CUMULUS_BACKUP_DIR=none` still disables backups on purpose.
+- **`update_settings` (and every dedicated settings tool) reported success for fields CumulusMX ignored.** CumulusMX only stores a
+  service's fields when that service is enabled (CWOP, MQTT...). The section is now read back; fields that were not saved are listed
+  in `no_guardados` with an explanatory warning, and `aplicado` is `false` when none was saved.
+- `restore_backup` now reports `aplicado` for editor backups too, and explains records that cannot be restored (a record that had no
+  value or date is "unset" and CumulusMX offers no way to unset it).
+- Empty replies from CumulusMX (a freshly started installation answers an empty body to the day file) are explained instead of
+  raising a JSON error; `mysql_table` handles an empty reply.
+- A pressure of 0 (a faulty sensor) no longer becomes the minimum of the year in `climate_summary`/`rankings`; `data_quality`
+  reports it.
+- `edit_dayfile`, `edit_datalog` and `edit_recent_data` accept numbers and `null` in `values`, not only strings.
+
+### Added
+- `tests_integration/` and the `Integration (real CumulusMX)` workflow, and a technical gate in `release.yml`: no tag, image or PyPI
+  upload is produced unless `tests.yml` and `integration.yml` are green for that exact commit.
+
+### Known limits of CumulusMX (documented, not fixable from the client)
+- Recent-data edits are stored with the decimals the API displays; CumulusMX copies BGT into WBGT on that path (upstream bug).
+- Record times are stored to the minute; unset records cannot be restored to "unset".
+- Services that are disabled do not store their settings.
+
 ## [1.8.1]
 
 ### Fixed
