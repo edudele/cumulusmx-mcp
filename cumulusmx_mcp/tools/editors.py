@@ -109,9 +109,27 @@ def _recent_row(values: list) -> list[str]:
     return row
 
 
+# CumulusMX (RecentData.FromCsvArray) lee los campos 1-17 con cultura invariante (punto decimal) pero estos con la cultura del
+# sistema, SIN indicarlo: UV (20), temperatura interior (21), partículas (23, 24) y BGT/WBGT (25, 26). En una estación con coma
+# decimal "20.9" se lee como 209 (se vio con CumulusMX real: la temperatura interior y las partículas se multiplicaban por 10).
+# Los índices cuentan desde la marca de tiempo (sin la fecha en texto).
+CULTURE_PARSED_RECENT_FIELDS = (20, 21, 23, 24, 25, 26)
+
+
+def _localize_recent(row: list[str], separator: str) -> list[str]:
+    """Reescribe con el separador decimal de la estación los campos que CumulusMX lee con su cultura."""
+    if separator == ".":
+        return row
+    out = list(row)
+    for i in CULTURE_PARSED_RECENT_FIELDS:
+        if i < len(out) and out[i] != "null":
+            out[i] = out[i].replace(",", ".").replace(".", separator)
+    return out
+
+
 async def _edit_recent(action: str, values: list[str | int | float | None]) -> str:
     _check_action(action)
-    sent = _recent_row(values)
+    sent = _localize_recent(_recent_row(values), await _station_decimal_separator())
     timestamp = sent[0].strip()
     payload = _editor_payload(action, data=[sent])
     row = await capture.recent_row(timestamp) if backups.enabled() else None
@@ -216,6 +234,16 @@ async def _edit_records(scope: str, field: str, value: float, time: str, month: 
             content = {"scope": scope, "field": field, "month": month, "accion": "Edit", **(entry or {"raw": before})}
             backup_id = backups.save("records", f"{scope}-{field}", content, "edit_records")
     response = await client._post(f"/api/edit/{scope}", content=body, headers=settings_engine.FORM_HEADERS)
+    if not response.startswith("ERROR"):
+        # CumulusMX responde 200 aunque no aplique el cambio (p. ej. con una fecha que no entiende): se comprueba releyéndolo
+        shown = capture.record_entry(await client._get(f"/api/edit/{scope}records.json"), scope, field, month)
+        try:
+            applied = shown is not None and abs(capture.parse_regional_number(shown["valor"]) - float(value)) <= 0.51
+        except ValueError:
+            applied = False
+        if not applied:
+            return (f"ERROR: CumulusMX respondió ({response[:80]!r}) pero el récord {field} no cambió: "
+                    f"muestra {shown['valor'] if shown else 'nada'} en vez de {value}. Revisa el formato de la fecha/hora.")
     return _envelope(response, backup_id, "el récord")
 
 

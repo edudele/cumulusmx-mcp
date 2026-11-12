@@ -209,14 +209,18 @@ class FakeCumulus:
         if found is None:
             return self._json({"errors": {"Recent": ["no existe"]}}, 500)
         if new["action"] == "Edit":
-            def conv(v):
+            def conv(v, culture: bool):
                 if v == "null":
                     return None
                 try:
                     return int(v)
                 except ValueError:
-                    return float(v)
-            self.recent[found] = [self.recent[found][0], *[conv(v) for v in row]]
+                    # RecentData.FromCsvArray: los campos 20-26 se leen con la cultura del sistema (coma decimal en es-ES:
+                    # "20.9" -> 209, el punto es separador de miles); el resto, con cultura invariante
+                    if culture and self.decimal_comma:
+                        return float(v.replace(".", "").replace(",", "."))
+                    return float(v.replace(",", ".")) if not culture else float(v)
+            self.recent[found] = [self.recent[found][0], *[conv(v, i in (20, 21, 23, 24, 25, 26)) for i, v in enumerate(row)]]
         else:
             del self.recent[found]
         return self._json({"errors": None})

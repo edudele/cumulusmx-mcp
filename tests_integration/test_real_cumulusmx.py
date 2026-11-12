@@ -50,9 +50,14 @@ async def call_json(mcp_client: Client, tool: str, /, **args):
 
 
 def blank_as_none(node):
-    """CumulusMX guarda un texto vacío o un espacio como null al guardar ajustes: para comparar son lo mismo."""
+    """Normalizaciones propias de CumulusMX al guardar ajustes (no del MCP), para comparar antes y después:
+    un texto vacío o un espacio se guarda como null, y `summer10am` (solo tiene sentido con cambio de día a las 9) pasa a false
+    cuando el cambio de día es a medianoche."""
     if isinstance(node, dict):
-        return {k: blank_as_none(v) for k, v in node.items()}
+        out = {k: blank_as_none(v) for k, v in node.items()}
+        if out.get("time") == "midnight" and "summer10am" in out:
+            out["summer10am"] = False
+        return out
     if isinstance(node, list):
         return [blank_as_none(v) for v in node]
     return None if isinstance(node, str) and not node.strip() else node
@@ -396,28 +401,34 @@ def record_lines(data_dir: Path, scope: str, field: str, month: int | None = Non
     return out
 
 
-# Campos que el Simulator NO modifica por sí solo en pocos minutos (los de temperatura, viento o humedad sí)
-@pytest.mark.parametrize("scope,field,value,time", [
-    ("alltime", "longestWetPeriod", 5, "03/01/2026"),
-    ("alltime", "longestDryPeriod", 12, "04/01/2026"),
-    ("alltime", "highHourlyRain", 1.5, "01/01/2026 12:00"),
-    ("thisyear", "longestDryPeriod", 9, "05/05/2026"),
+# Campos que el Simulator NO modifica por sí solo en pocos minutos (los de temperatura, viento o humedad sí).
+# Un récord "sin establecer" (valor 0 y fecha «-») no se puede restaurar con el editor de CumulusMX: se hacen DOS ediciones y se
+# restaura la segunda; la restauración de la primera debe avisar con claridad en vez de fingir que lo consiguió.
+@pytest.mark.parametrize("scope,field,first,second,time1,time2", [
+    ("alltime", "longestWetPeriod", 5, 8, "03/01/2026", "04/01/2026"),
+    ("alltime", "longestDryPeriod", 12, 15, "05/01/2026", "06/01/2026"),
+    ("alltime", "highHourlyRain", 1.5, 2.5, "01/01/2026 12:00", "02/01/2026 13:30"),
+    ("thisyear", "longestDryPeriod", 9, 11, "05/05/2026", "06/05/2026"),
 ])
-async def test_records_edit_and_restore(client, data_dir, scope, field, value, time):
-    api_before = json.loads(await call(client, "records_edit_data", scope=scope))
-    lines_before = record_lines(data_dir, scope, field)
+async def test_records_edit_and_restore(client, data_dir, scope, field, first, second, time1, time2):
+    one = envelope(await call(client, "edit_records", scope=scope, field=field, value=first, time=time1))
+    assert "ERROR" not in one["respuesta"] and one["copia_id"], one
+    state = json.loads(await call(client, "records_edit_data", scope=scope))
+    lines = record_lines(data_dir, scope, field)
     if scope != "thisyear":
-        assert lines_before, f"no encontré {field} en el .ini"
-    res = envelope(await call(client, "edit_records", scope=scope, field=field, value=value, time=time))
-    assert "ERROR" not in res["respuesta"] and res["copia_id"], res
+        assert lines, f"no encontré {field} en el .ini"
+    two = envelope(await call(client, "edit_records", scope=scope, field=field, value=second, time=time2))
+    assert "ERROR" not in two["respuesta"] and two["copia_id"], two
     shown = float(json.loads(await call(client, "records_edit_data", scope=scope))[f"{field}Val"].replace(",", "."))
-    assert abs(shown - float(value)) <= 0.51, f"CumulusMX muestra {shown}, se esperaba {value}"
-    out = await restore(client, res["copia_id"])
+    assert abs(shown - float(second)) <= 0.51, f"CumulusMX muestra {shown}, se esperaba {second}"
+    out = await restore(client, two["copia_id"])
     assert out.get("aplicado") is True, out
-    api_after = json.loads(await call(client, "records_edit_data", scope=scope))
-    assert (api_after[f"{field}Val"], api_after[f"{field}Time"]) == (api_before[f"{field}Val"], api_before[f"{field}Time"]), \
-        "el récord restaurado difiere del original"
-    assert record_lines(data_dir, scope, field) == lines_before, "el .ini difiere tras restaurar (hasta la precisión que muestra CumulusMX)"
+    after = json.loads(await call(client, "records_edit_data", scope=scope))
+    assert (after[f"{field}Val"], after[f"{field}Time"]) == (state[f"{field}Val"], state[f"{field}Time"]), \
+        "el récord restaurado difiere del que había antes de la segunda edición"
+    assert record_lines(data_dir, scope, field) == lines, "el .ini difiere tras restaurar (hasta la precisión que muestra CumulusMX)"
+    attempt = json.loads(await call(client, "restore_backup", backup_id=one["copia_id"], dry_run=False))
+    assert attempt.get("aplicado") is False and "no tenía valor o fecha" in attempt.get("error", ""), attempt
 
 
 async def test_monthly_record_edit_chain_and_restore(client, data_dir):
