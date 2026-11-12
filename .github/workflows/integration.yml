@@ -69,6 +69,8 @@ jobs:
           if [ ! -f CumulusMX.dll ]; then d=$(dirname "$(find . -name CumulusMX.dll | head -1)"); cd "$d"; fi
           pwd > "$GITHUB_WORKSPACE/cmx-dir.txt"
           cat > Cumulus.ini <<'EOF'
+          [Program]
+          ProcessLogFiles=1
           [Station]
           Type=17
           LocName=CI Station
@@ -78,6 +80,13 @@ jobs:
           EOF
           sed -i 's/^          //' Cumulus.ini
           cat Cumulus.ini
+
+      - name: Seed the test data (day file and interval log)
+        run: |
+          set -euo pipefail
+          mkdir -p "$(cat cmx-dir.txt)/data"
+          python -m tests_integration.seed "$(cat cmx-dir.txt)/data"
+          head -c 400 "$(cat cmx-dir.txt)/data/dayfile.txt"; echo
 
       - name: Start CumulusMX
         run: |
@@ -91,14 +100,35 @@ jobs:
           done
           echo "CumulusMX no arrancó" >&2; tail -60 "$GITHUB_WORKSPACE/cmx.log"; exit 1
 
-      - name: Reconnaissance of the real API
+      - name: Wait for the Simulator to produce recent data
         run: |
-          cd "$(cat cmx-dir.txt)"
-          for p in /api/info/version.json "/api/tags/process.json?temp&hum" "/api/data/dayfile?draw=1&start=0&length=2" \
-                   "/api/data/recentdata?draw=1&start=0&length=2" /api/settings/mysqldata.json /api/edit/alltimerecords.json; do
-            echo "=== $p"; curl -sS -m 20 "http://127.0.0.1:8998$p" | head -c 700; echo
+          set -euo pipefail
+          for i in $(seq 1 150); do
+            n=$(curl -fsS "http://127.0.0.1:8998/api/data/recentdata?draw=1&start=0&length=1" | python -c "import sys,json; print(json.load(sys.stdin)['recordsTotal'])")
+            echo "datos recientes: $n"
+            if [ "$n" -ge 4 ]; then exit 0; fi
+            sleep 2
           done
-          echo "=== data dir"; ls -la data 2>/dev/null | head -30
+          echo "El Simulator no generó datos recientes" >&2; exit 1
+
+      - name: Run the integration tests against the real CumulusMX
+        env:
+          CUMULUSMX_REAL_URL: http://127.0.0.1:8998
+        run: |
+          set -euo pipefail
+          export CUMULUSMX_DATA_DIR="$(cat cmx-dir.txt)/data"
+          python -m pytest tests_integration -v -rfEs --tb=short -p no:cacheprovider 2>&1 | tee integration-report.txt
+
+      - name: Upload evidence (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-evidence-${{ matrix.lang }}
+          path: |
+            integration-report.txt
+            cmx.log
+            cmx-dir.txt
+            seed.json
 
       - name: Diagnostics (always)
         if: always()
