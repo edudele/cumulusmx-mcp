@@ -460,9 +460,9 @@ def perturb(node, path=()):
         if node.get("enabled") is False:   # CumulusMX solo guarda los campos de un servicio si está habilitado (p. ej. cwop.server)
             return None
         for key, value in node.items():
-            if (isinstance(value, str) and value.strip() and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
+            if (isinstance(value, str) and re.search(r"name|title|desc|comment|host|server|prefix|suffix|label|city|site|subject", key, re.I)
                     and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time", key, re.I)):
-                return path + (key,), value + "-ci"
+                return path + (key,), value.strip() + "-ci"
             found = perturb(value, path + (key,))
             if found:
                 return found
@@ -496,24 +496,45 @@ def at(node, path):
     return node
 
 
+def without_quirks(section: str, node):
+    """Rarezas de CumulusMX al guardar una sección (no del MCP): el asistente (`wizard`) recalcula `station.davisvp2.conntype`
+    según el tipo de estación, así que vuelve con otro valor aunque se le envíe el mismo."""
+    node = blank_as_none(node)
+    if section == "wizard" and isinstance(node, dict) and isinstance((node.get("station") or {}).get("davisvp2"), dict):
+        node["station"]["davisvp2"].pop("conntype", None)
+    return node
+
+
+async def check_section_round_trip(client, section: str) -> bool:
+    """Cambia un texto de la sección, comprueba que CumulusMX lo guardó, restaura y compara. False si no hay texto que probar."""
+    before = json.loads(await call(client, "get_settings", section=section))
+    found = perturb(before)
+    if not found:
+        return False
+    path, new = found
+    res = envelope(await call(client, "update_settings", section=section, settings=nested(path, new), dry_run=False))
+    assert res.get("aplicado") is True, res
+    during = json.loads(await call(client, "get_settings", section=section))
+    assert str(at(during, path)).strip() == new.strip(), f"CumulusMX no guardó el cambio en {path}"
+    out = await restore(client, res["copia_id"])
+    assert out.get("aplicado") is True, out
+    after = json.loads(await call(client, "get_settings", section=section))
+    assert without_quirks(section, after) == without_quirks(section, before), \
+        f"la sección restaurada difiere (tras cambiar {'/'.join(map(str, path))}): " \
+        f"{diff_paths(without_quirks(section, before), without_quirks(section, after))[:6]}"
+    return True
+
+
 async def test_every_settings_section_survives_update_and_restore(client):
-    exercised = []
+    """Todas las secciones se prueban aunque una falle, para ver los fallos de una vez."""
+    exercised, failures = [], []
     for section in SETTINGS_SECTIONS:
-        before = json.loads(await call(client, "get_settings", section=section))
-        found = perturb(before)
-        if not found:
-            continue
-        path, new = found
-        res = envelope(await call(client, "update_settings", section=section, settings=nested(path, new), dry_run=False))
-        assert res.get("aplicado") is True, (section, res)
-        during = json.loads(await call(client, "get_settings", section=section))
-        assert str(at(during, path)).strip() == new.strip(), f"{section}: CumulusMX no guardó el cambio en {path}"
-        out = await restore(client, res["copia_id"])
-        assert out.get("aplicado") is True, (section, out)
-        after = json.loads(await call(client, "get_settings", section=section))
-        assert blank_as_none(after) == blank_as_none(before), \
-            f"{section}: la sección restaurada difiere (tras cambiar {'/'.join(map(str, path))}): {diff_paths(blank_as_none(before), blank_as_none(after))[:6]}"
-        exercised.append(section)
+        try:
+            if await check_section_round_trip(client, section):
+                exercised.append(section)
+        except AssertionError as exc:
+            failures.append(f"{section}: {str(exc)[:300]}")
+    assert not failures, "secciones con fallo -> " + " || ".join(failures)
     assert len(exercised) >= 8, f"demasiadas secciones sin probar: solo {exercised}"
 
 
