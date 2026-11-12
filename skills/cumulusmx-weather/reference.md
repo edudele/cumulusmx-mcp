@@ -40,7 +40,7 @@ Parameter notes for the 89 tools of cumulusmx-mcp. Tool names are in backticks i
 | `live_sample` | `seconds` (max 60), `max_messages` (max 20). Messages from the `/ws/` WebSocket, same JSON as `current_data`. Reports an `error` field if the socket cannot be opened. |
 | `weather_alerts` | Optional `thresholds` (`frost_temp` 3, `wind_gust` 60, `rain_rate` 20, `heat_index` 35, `uv` 8, `pressure_drop_3h` -3, `humidity_low` 20; station units). Returns `hay_alertas`, `alertas` (`tipo`, `nivel` alerta > aviso > info, `mensaje`, `valor`, `umbral`), the conditions used and `avisos` (for example when the station is not metric). |
 | `period_report` | `period` (`week` = 7 days ending at `ref_date`, `month` = day 1 to `ref_date`, `year` = 1 January to `ref_date`), `ref_date` (default: last day with data). Returns Markdown: temperature, rain and streaks, wind, pressure, sun, comparison with the station's normals, missing-data note. |
-| `list_backups` | `kind` (`settings`, `dayfile`, `datalog`, `recent`, `mysqlcache`, `records` or empty), `limit`. Metadata only: `id`, `creada`, `tipo`, `objetivo`, `herramienta`. |
+| `list_backups` | `kind` (`settings`, `dayfile`, `datalog`, `recent`, `mysqlcache`, `records`, `rain` or empty), `limit`. Metadata only: `id`, `creada`, `tipo`, `objetivo`, `herramienta`. |
 | `get_backup` | `backup_id`. Full content (passwords masked with `CUMULUS_MASK_SECRETS` or the read-only token). |
 | `get_audit_log` | `limit`, `tool`. Recent writes: tool, token scope (`full` / `readonly`), arguments without secrets, result (`ok`, `fallo`, `denegado`, `error`). |
 | `monthly_summary` | `year` (2000-2050). One aggregate per month that has data. |
@@ -91,7 +91,9 @@ solar W/m2.
 ## Write tools (destructive, ask first)
 
 Configuration writes return JSON: `seccion`, `campos_modificados` (`{path: {antes, despues}}`, secrets always masked),
-`aplicado`, `respuesta`. With `dry_run=true` nothing is sent. With no differences nothing is sent either.
+`aplicado`, `respuesta`. With `dry_run=true` nothing is sent. With no differences nothing is sent either. After writing, the section is read
+back: fields CumulusMX accepted but did not store (typically a disabled service such as MQTT or CWOP) are listed in `no_guardados` with a
+warning, and `aplicado` is `false` if none was stored.
 
 | Tool | Effect |
 |---|---|
@@ -104,13 +106,14 @@ Configuration writes return JSON: `seccion`, `campos_modificados` (`{path: {ante
 | `upload_reports` | Uploads NOAA reports with the same arguments as `generate_reports`. |
 | `test_email` | `from_email`, `dest_email`, optional `use_html`, `use_bcc`. Sends a real test email to check alarm SMTP settings. |
 | `edit_current_conditions` | Sets the current-conditions text. |
-| `edit_rain_today` | `raintoday`, optional `midnightrain`. Changes recorded rainfall. |
+| `edit_rain_today` | `raintoday`, optional `midnightrain` and `rainratetoday` (the current values are kept when omitted). Verifies that CumulusMX applied it (it silently ignores partial requests) and backs up the previous values (`kind="rain"`, restorable). |
 | `edit_diary` | Creates or updates a diary entry with observations and snow/storm flags. |
 | `delete_diary` | Deletes the diary entry of one `date`. |
 | `update_station_settings`, `update_calibration_settings`, `update_alarm_settings` | Partial merge of a settings object. Read the current settings first. |
 
 When writes are disabled (`ENABLE_WRITE_TOOLS=false`) these tools return an error message
-and change nothing.
+and change nothing. If backups are enabled but the previous state cannot be saved (for example the data volume is not writable by the
+container user), the write is refused and nothing is changed; `CUMULUS_BACKUP_DIR=none` disables backups on purpose.
 
 ### Configuration, MySQL, MQTT
 
@@ -134,7 +137,7 @@ and change nothing.
 
 | Tool | Effect |
 |---|---|
-| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup), a day-file or interval-log line, a recent-data record, a MySQL-cache statement or a record (previous value and time), as long as the original write was an *Edit*. A *Delete* cannot be re-inserted (CumulusMX has no such action): `get_backup` shows what was lost. The restore creates its own backup, so it can be undone too. |
+| `restore_backup` | `backup_id`, `dry_run` (default **true**). Restores a settings section (replacing it with the backup), a day-file or interval-log line, a recent-data record, a MySQL-cache statement, today's rain or a record (previous value and time), as long as the original write was an *Edit*. The answer includes `aplicado`; a record that had no value or date cannot be restored to "unset" and is explained. A *Delete* cannot be re-inserted (CumulusMX has no such action): `get_backup` shows what was lost. The restore creates its own backup, so it can be undone too. |
 
 `edit_dayfile`, `edit_datalog`, `edit_recent_data`, `edit_mysql_cache` and `edit_records` return JSON with `respuesta` (CumulusMX's answer) and `copia_id`. `edit_mysql_cache` Edit takes exactly one key and one statement; Delete reads the statements from the cache itself.
 
