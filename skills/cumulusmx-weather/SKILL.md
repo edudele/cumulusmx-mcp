@@ -121,7 +121,12 @@ Before using any of them:
 6. **After every write, tell the user the `copia_id`** (when there is one) and that `restore_backup(copia_id)` undoes it.
    Every write is audited; `get_audit_log` shows what was done. If a write answers that the token is read-only or that
    writes are disabled, say so and stop: do not look for another way to do it.
-7. Settings payloads contain credentials (FTP, MySQL, MQTT, SMTP, API keys). Do not repeat them in your answer;
+7. **Check the result, not just the call.** A settings update answers `aplicado: false` with `no_guardados` (and a warning) when
+   CumulusMX accepted the request but did not store a field, typically because that service (MQTT, CWOP, Wunderground...) is
+   disabled: report that honestly and, if the user wants the change, enable the service in the same call. If the server answers
+   that it cannot save the pre-change backup, it has changed nothing; tell the user (usually a volume permission problem)
+   instead of retrying. After a history edit, read the row back and confirm it changed.
+8. Settings payloads contain credentials (FTP, MySQL, MQTT, SMTP, API keys). Do not repeat them in your answer;
    mask secrets when summarizing. With `CUMULUS_MASK_SECRETS=true` the server masks them for you.
 
 ## Ready-made prompts and resources
