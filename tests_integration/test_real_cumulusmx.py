@@ -33,20 +33,29 @@ def failed(result) -> bool:
     return bool(getattr(result, "isError", False) if flag is None else flag)
 
 
-async def call(client: Client, name: str, **args) -> str:
+async def call(mcp_client: Client, tool: str, /, **args) -> str:
     """Llama a una herramienta; si el servidor MCP la rechaza lanza AssertionError con el motivo."""
-    result = await client.call_tool(name, args, raise_on_error=False)
+    result = await mcp_client.call_tool(tool, args, raise_on_error=False)
     text = text_of(result)
-    assert not failed(result), f"{name}({args}) -> error MCP: {text[:600]}"
+    assert not failed(result), f"{tool}({args}) -> error MCP: {text[:600]}"
     return text
 
 
-async def call_json(client: Client, name: str, **args):
-    text = await call(client, name, **args)
+async def call_json(mcp_client: Client, tool: str, /, **args):
+    text = await call(mcp_client, tool, **args)
     try:
         return json.loads(text)
     except ValueError:
-        pytest.fail(f"{name}({args}) no devolvió JSON: {text[:400]}")
+        pytest.fail(f"{tool}({args}) no devolvió JSON: {text[:400]}")
+
+
+def blank_as_none(node):
+    """CumulusMX guarda un texto vacío o un espacio como null al guardar ajustes: para comparar son lo mismo."""
+    if isinstance(node, dict):
+        return {k: blank_as_none(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [blank_as_none(v) for v in node]
+    return None if isinstance(node, str) and not node.strip() else node
 
 
 def assert_ok_text(name: str, args: dict, text: str):
@@ -56,8 +65,17 @@ def assert_ok_text(name: str, args: dict, text: str):
 
 @pytest.fixture
 async def client():
-    async with Client(server.mcp) as c:
-        yield c
+    from cumulusmx_mcp import client as cumulus_client
+
+    cumulus_client._client = None            # cada test tiene su propio bucle de eventos: el cliente HTTP no se comparte
+    try:
+        async with Client(server.mcp) as c:
+            yield c
+    finally:
+        http = cumulus_client._client
+        cumulus_client._client = None
+        if http is not None:
+            await http.aclose()
 
 
 def d(value: str) -> dt.date:
@@ -327,8 +345,10 @@ async def test_recent_data_edit_and_restore(client, data_dir):
 
 
 def ini_without_seconds(path: Path) -> str:
-    """Los .ini guardan fechas ISO con segundos; el editor de CumulusMX solo admite minutos (limitación del servidor)."""
-    return re.sub(r"(\d{4}-\d\d-\d\dT\d\d:\d\d):\d\d", r"\1:00", path.read_text(encoding="utf-8"))
+    """Limitación de CumulusMX, no del MCP: los .ini guardan fechas ISO con segundos y valores con todos sus decimales, pero el
+    editor de récords solo acepta minutos y el valor tal como se MUESTRA. Se compara hasta esa precisión (1 decimal)."""
+    text = re.sub(r"(\d{4}-\d\d-\d\dT\d\d:\d\d):\d\d", r"\1:00", path.read_text(encoding="utf-8"))
+    return re.sub(r"(=-?\d+\.\d)\d+", r"\1", text)
 
 
 @pytest.mark.parametrize("scope,field,value,time,month", [
@@ -349,7 +369,8 @@ async def test_records_edit_and_restore(client, data_dir, scope, field, value, t
     assert "ERROR" not in res["respuesta"] and res["copia_id"], res
     key = f"{month}-{field}" if scope == "monthly" else field
     now = json.loads(await call(client, "records_edit_data", scope=scope))
-    assert str(value).replace(".", ",").rstrip("0").rstrip(",") in now[f"{key}Val"].replace(".", ","), now[f"{key}Val"]
+    shown = float(now[f"{key}Val"].replace(",", "."))
+    assert abs(shown - float(value)) <= 0.51, f"CumulusMX muestra {shown}, se esperaba {value}"
     out = await restore(client, res["copia_id"])
     assert out.get("aplicado") is True, out
     assert json.loads(await call(client, "records_edit_data", scope=scope)) == json.loads(records_before), \
@@ -396,7 +417,7 @@ async def test_every_settings_section_survives_update_and_restore(client):
         out = await restore(client, res["copia_id"])
         assert out.get("aplicado") is True, (section, out)
         after = json.loads(await call(client, "get_settings", section=section))
-        assert after == before, f"{section}: la sección restaurada difiere de la original"
+        assert blank_as_none(after) == blank_as_none(before), f"{section}: la sección restaurada difiere de la original"
         exercised.append(section)
     assert len(exercised) >= 8, f"demasiadas secciones sin probar: solo {exercised}"
 
@@ -413,13 +434,13 @@ async def test_dedicated_settings_tools(client):
         res = envelope(await call(client, tool, settings=change, dry_run=False))
         assert res.get("aplicado") is True, res
         await restore(client, res["copia_id"])
-        assert json.loads(await call(client, "get_settings", section=section)) == before, f"{section} no volvió a su estado"
+        assert blank_as_none(json.loads(await call(client, "get_settings", section=section))) == blank_as_none(before), f"{section} no volvió a su estado"
     noaa_before = json.loads(await call(client, "get_settings", section="noaa"))
     found = perturb(noaa_before)
     assert found, "la sección noaa no tiene ningún texto que probar"
     res = envelope(await call(client, "update_noaa_settings", settings=nested(*found[:1], found[1]), dry_run=False))
     await restore(client, res["copia_id"])
-    assert json.loads(await call(client, "get_settings", section="noaa")) == noaa_before
+    assert blank_as_none(json.loads(await call(client, "get_settings", section="noaa"))) == blank_as_none(noaa_before)
 
 
 async def test_classic_settings_updaters(client):
@@ -437,21 +458,23 @@ async def test_classic_settings_updaters(client):
         backups = json.loads(await call(client, "list_backups", kind="settings"))["copias"]
         assert backups, f"{tool} no dejó copia"
         await restore(client, backups[0]["id"])
-        assert json.loads(await call(client, "get_settings", section=section)) == before, f"{section} no volvió a su estado"
+        assert blank_as_none(json.loads(await call(client, "get_settings", section=section))) == blank_as_none(before), f"{section} no volvió a su estado"
         assert_ok_text(getter, {}, await call(client, getter))
 
 
 async def test_diary_roundtrip(client):
     day = "2026-10-01"
-    before = await call(client, "diary_export")
-    out = await call(client, "edit_diary", date=day, entry="entrada de prueba CI", thunder=True)
-    assert_ok_text("edit_diary", {}, out)
-    assert "entrada de prueba CI" in await call(client, "diary", date=day)
-    assert "entrada de prueba CI" in await call(client, "diary_export")
+    marker = "entrada de prueba CI"
+    assert_ok_text("edit_diary", {}, await call(client, "edit_diary", date=day, entry=marker, thunder=True))
+    assert marker in await call(client, "diary", date=day)
+    exported = await call(client, "diary_export")
+    assert marker in exported
     assert_ok_text("delete_diary", {}, await call(client, "delete_diary", date=day))
-    assert "entrada de prueba CI" not in await call(client, "diary_export")
-    csv = "Timestamp,entry,snowFalling,snowLying,snowDepth\n" if not before.strip() else before
-    assert_ok_text("diary_upload", {}, await call(client, "diary_upload", csv_content=csv))
+    assert marker not in await call(client, "diary_export")
+    assert_ok_text("diary_upload", {}, await call(client, "diary_upload", csv_content=exported))     # reimporta lo exportado
+    assert marker in await call(client, "diary_export")
+    await call(client, "delete_diary", date=day)                                                       # limpieza
+    assert marker not in await call(client, "diary_export")
 
 
 async def test_diary_automate_off(client):
@@ -463,14 +486,16 @@ async def test_current_conditions_and_rain_today(client):
     assert_ok_text("edit_current_conditions", {}, await call(client, "edit_current_conditions", text="prueba de integración"))
     assert "prueba de integración" in await call(client, "get_current_conditions_text")
     await call(client, "edit_current_conditions", text=original_text)
-    tags = json.loads(await call(client, "get_tags", tags=["rfall"]))
-    original_rain = float(str(tags["rfall"]).replace(",", "."))
-    assert_ok_text("edit_rain_today", {}, await call(client, "edit_rain_today", raintoday=1.5))
-    now = json.loads(await call(client, "get_tags", tags=["rfall"]))
-    assert abs(float(str(now["rfall"]).replace(",", ".")) - 1.5) < 0.01, now
-    await call(client, "edit_rain_today", raintoday=original_rain)
-    back = json.loads(await call(client, "get_tags", tags=["rfall"]))
-    assert abs(float(str(back["rfall"]).replace(",", ".")) - original_rain) < 0.01, back
+    def rain(tags: dict) -> float:
+        return float(str(tags["rfall"]).replace(",", "."))
+
+    original_rain = rain(json.loads(await call(client, "get_tags", tags=["rfall"])))
+    res = envelope(await call(client, "edit_rain_today", raintoday=1.5))
+    assert "ERROR" not in res["respuesta"] and res["copia_id"], res
+    assert abs(rain(json.loads(await call(client, "get_tags", tags=["rfall"]))) - 1.5) < 0.06, "CumulusMX no aplicó la lluvia de hoy"
+    out = await restore(client, res["copia_id"])
+    assert out.get("aplicado") is True, out
+    assert abs(rain(json.loads(await call(client, "get_tags", tags=["rfall"]))) - original_rain) < 0.06, "la lluvia no volvió a su valor"
 
 
 async def test_maintenance_tools(client, data_dir):

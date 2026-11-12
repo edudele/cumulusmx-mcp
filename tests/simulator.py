@@ -49,6 +49,7 @@ class FakeCumulus:
         self.recent = [self._recent_row("24/08/19 10:00", 1566640800, 10.5), self._recent_row("24/08/19 10:10", 1566641400, 10.7)]
         self.mysqlcache = [[7, "INSERT INTO Monthly VALUES (1)"], [8, "INSERT INTO Monthly VALUES (2)"]]
         self.temp = "10,0" if decimal_comma else "10.0"
+        self.rain = {"raintoday": "0.0", "midnightrain": "0.0", "rainratetoday": "0.0"}
         self.created_tables: list[str] = []
         self.sql_posts: list[str] = []
 
@@ -233,6 +234,18 @@ class FakeCumulus:
             self.mysqlcache = [r for r in self.mysqlcache if r[0] not in new["keys"]]
         return self._json({"errors": None})
 
+    async def rain_get(self, request: Request) -> Response:
+        return self._json(self.rain)
+
+    async def rain_post(self, request: Request) -> Response:
+        body = await self._body(request)
+        self.requests.append(("POST", "/api/edit/raintoday", body))
+        form = urllib.parse.parse_qs(body)
+        # DataEditor.EditRainToday: si falta UNO de los tres campos solo anota un error en su log y responde 200 sin cambiar nada
+        if all(k in form and re.fullmatch(r"-?\d+(\.\d+)?", form[k][0]) for k in ("raintoday", "midnightrain", "rainratetoday")):
+            self.rain = {k: f"{float(form[k][0]):.1f}" for k in ("raintoday", "midnightrain", "rainratetoday")}
+        return self._json({"raintoday": self.rain["raintoday"], "raincounter": "0.0", "startofdayrain": "0.0", "rainmult": "1.000"})
+
     async def version(self, request: Request) -> Response:
         return self._json({"Version": "5.2.0", "Build": "5026"})
 
@@ -251,6 +264,8 @@ class FakeCumulus:
             Route("/api/edit/recentdata", self.edit_recentdata, methods=["POST"]),
             Route("/api/edit/mysqlcache", self.edit_mysqlcache, methods=["POST"]),
             Route("/api/info/version.json", self.version),
+            Route("/api/edit/raintodayeditdata.json", self.rain_get),
+            Route("/api/edit/raintoday", self.rain_post, methods=["POST"]),
         ]
         for scope in ("alltime", "monthly", "thismonth", "thisyear"):
             r.append(Route(f"/api/edit/{scope}", self._edit_records_route(scope), methods=["POST"]))

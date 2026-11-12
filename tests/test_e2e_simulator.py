@@ -181,6 +181,18 @@ class TestBackupsAndRestore:
         assert not posts(sim, "/api/edit/recentdata")
 
     @pytest.mark.asyncio
+    async def test_rain_today_is_edited_and_restored(self, sim):
+        res = json.loads(await server.edit_rain_today(4.5))
+        assert sim.rain["raintoday"] == "4.5" and res["copia_id"]
+        out = json.loads(await server.restore_backup(res["copia_id"], dry_run=False))
+        assert out["aplicado"] is True and sim.rain == {"raintoday": "0.0", "midnightrain": "0.0", "rainratetoday": "0.0"}
+
+    @pytest.mark.asyncio
+    async def test_editor_restores_report_aplicado(self, sim):
+        res = json.loads(await server.edit_dayfile("Edit", 1, ["24/08/19", "1"]))
+        assert json.loads(await server.restore_backup(res["copia_id"], dry_run=False))["aplicado"] is True
+
+    @pytest.mark.asyncio
     async def test_integer_records_are_sent_as_integers(self, sim):
         res = json.loads(await server.edit_records("alltime", "lowHumidity", 7, "15/09/2024 10:00"))
         assert "ERROR" not in res["respuesta"] and sim.records["alltime"]["lowHumidity"] == (7, "15/09/2024 10:00")

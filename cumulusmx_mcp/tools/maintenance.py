@@ -2,7 +2,7 @@
 import json
 
 
-from .. import client
+from .. import backups, client
 from .. import dayrows
 from .. import safety
 from ..app import READ_ONLY, mcp, write_tool
@@ -98,19 +98,42 @@ async def edit_current_conditions(text: str) -> str:
     )
 
 
-@write_tool
-async def edit_rain_today(raintoday: float, midnightrain: float | None = None) -> str:
-    """Modifica los valores acumulados de lluvia de hoy y lluvia desde medianoche en la estación."""
-    if (err := safety._check_write_enabled()):
-        return err
-    if midnightrain is None:
-        try:
-            curr = await client._json("/api/edit/raintodayeditdata.json")
-            midnightrain = float(curr.get("midnightrain", raintoday))
-        except Exception:
-            midnightrain = raintoday
-    data = {
-        "raintoday": f"{float(raintoday):.3f}",
-        "midnightrain": f"{float(midnightrain):.3f}",
+RAIN_FIELDS = ("raintoday", "midnightrain", "rainratetoday")
+
+
+async def _edit_rain_today(raintoday: float, midnightrain: float | None, rainratetoday: float | None) -> str:
+    """Implementación de edit_rain_today (también la usa restore_backup).
+
+    CumulusMX exige TRES campos (raintoday, midnightrain y rainratetoday): si falta uno solo anota el error en su log, no
+    cambia nada y responde 200 con los valores sin tocar. Por eso se leen los actuales, se envían los tres y se comprueba
+    en la respuesta que el valor nuevo se aplicó."""
+    try:
+        current = await client._json("/api/edit/raintodayeditdata.json")
+        old = {k: str(current[k]) for k in RAIN_FIELDS}
+    except (ValueError, KeyError) as exc:
+        return f"ERROR: no se pudo leer la lluvia actual de CumulusMX; no se modifica nada ({exc})"
+    new = {
+        "raintoday": float(raintoday),
+        "midnightrain": float(old["midnightrain"]) if midnightrain is None else float(midnightrain),
+        "rainratetoday": float(old["rainratetoday"]) if rainratetoday is None else float(rainratetoday),
     }
-    return await client._post("/api/edit/raintoday", data=data)
+    backup_id = backups.save("rain", "hoy", {**old, "accion": "Edit"}, "edit_rain_today")
+    response = await client._post("/api/edit/raintoday", data={k: f"{v:.3f}" for k, v in new.items()})
+    try:
+        applied = abs(float(json.loads(response)["raintoday"]) - new["raintoday"]) <= 0.051
+    except (ValueError, KeyError, TypeError):
+        applied = False
+    if not applied:
+        return f"ERROR: CumulusMX no aplicó el cambio de la lluvia de hoy (respuesta: {response[:200]})"
+    result = {"respuesta": response, "copia_id": backup_id}
+    if backups.enabled() and backup_id is None:
+        result["aviso"] = "No se pudo guardar la copia previa de la lluvia (ver el log del servidor)."
+    return json.dumps(result, ensure_ascii=False)
+
+
+@write_tool
+async def edit_rain_today(raintoday: float, midnightrain: float | None = None, rainratetoday: float | None = None) -> str:
+    """Modifica la lluvia acumulada de hoy y, si se indican, la lluvia desde medianoche y la intensidad máxima de lluvia de
+    hoy (por defecto se conservan los valores actuales). Comprueba que CumulusMX aplicó el cambio y guarda antes los valores
+    anteriores (copia_id; restaurable con restore_backup)."""
+    return await _edit_rain_today(raintoday, midnightrain, rainratetoday)

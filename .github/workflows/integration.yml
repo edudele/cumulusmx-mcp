@@ -119,6 +119,17 @@ jobs:
           export CUMULUSMX_DATA_DIR="$(cat cmx-dir.txt)/data"
           python -m pytest tests_integration -v -rfEs --tb=short -p no:cacheprovider 2>&1 | tee integration-report.txt
 
+      - name: CumulusMX-side diagnostics of the day file (always)
+        if: always()
+        run: |
+          d="$(cat cmx-dir.txt 2>/dev/null || echo cmx)"
+          echo "=== respuesta cruda de /api/data/dayfile"
+          curl -si -m 30 "http://127.0.0.1:8998/api/data/dayfile?draw=1&start=0&length=2&search%5Bvalue%5D=" | head -c 1200; echo
+          echo "=== data dir"; ls -la "$d/data" | head -40
+          echo "=== primeras líneas del dayfile sembrado"; head -c 600 "$d/data/dayfile.txt"; echo
+          echo "=== errores/avisos del servidor"
+          grep -h -i -E "error|exception|fail|dayfile" "$d"/MXdiags/*.txt 2>/dev/null | tail -40 || true
+
       - name: Upload evidence (always)
         if: always()
         uses: actions/upload-artifact@v4

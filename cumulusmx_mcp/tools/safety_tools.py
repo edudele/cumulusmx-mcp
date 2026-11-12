@@ -4,11 +4,11 @@ from typing import Literal
 
 from .. import backups, capture, config, safety, settings_engine, utils
 from ..app import READ_ONLY, mcp, write_tool
-from . import editors
+from . import editors, maintenance
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def list_backups(kind: Literal["", "settings", "dayfile", "datalog", "recent", "mysqlcache", "records"] = "", limit: int = 20) -> str:
+async def list_backups(kind: Literal["", "settings", "dayfile", "datalog", "recent", "mysqlcache", "records", "rain"] = "", limit: int = 20) -> str:
     """Copias de seguridad creadas antes de cada escritura (ajustes, líneas del dayfile y de los logs, datos recientes, caché MySQL, récords), de la más reciente a la
     más antigua. Solo metadatos: id, fecha, tipo, objetivo y herramienta. Usa get_backup para ver el contenido y
     restore_backup para deshacer. Si las copias están desactivadas (CUMULUS_BACKUP_DIR=none) devuelve una lista vacía."""
@@ -33,6 +33,9 @@ def _plan(record: dict) -> tuple[str, dict, object] | tuple[str, None, str]:
     if kind == "settings":
         return "update_settings(replace)", {"section": target}, lambda dry: settings_engine._settings_update(
             target, content, dry_run=dry, replace=True)
+    if kind == "rain" and "raintoday" in content:
+        args = {k: float(content[k]) for k in ("raintoday", "midnightrain", "rainratetoday")}
+        return "edit_rain_today", args, lambda dry: maintenance._edit_rain_today(**args)
     if deleted:
         return kind, None, ("La copia es de un BORRADO: CumulusMX no tiene acción para reinsertar filas; el contenido guardado "
                             "(get_backup) sirve para recrearlas a mano.")
@@ -78,7 +81,21 @@ async def restore_backup(backup_id: str, dry_run: bool = True) -> str:
             return await runner(True)
         return json.dumps({"aplicado": False, "nota": "Vista previa: no se ha enviado nada a CumulusMX.",
                            "accion": {"herramienta": action, **args}}, ensure_ascii=False)
-    return await runner(False)
+    result = await runner(False)
+    if record["tipo"] == "settings":
+        return result
+    return _with_applied(result)           # las ediciones devuelven la respuesta de CumulusMX: se añade el campo "aplicado"
+
+
+def _with_applied(result: str) -> str:
+    """Añade "aplicado" (true/false) a la respuesta de una restauración, igual que en las de ajustes."""
+    try:
+        data = json.loads(result)
+    except ValueError:
+        return json.dumps({"aplicado": not safety.result_failed(result), "respuesta": result}, ensure_ascii=False)
+    if isinstance(data, dict):
+        return json.dumps({"aplicado": not safety.result_failed(result), **data}, ensure_ascii=False)
+    return result
 
 
 @mcp.tool(annotations=READ_ONLY)

@@ -1083,32 +1083,33 @@ class TestEditTools:
             )
 
     @pytest.mark.asyncio
-    async def test_edit_rain_today_with_midnight(self, monkeypatch):
+    async def test_edit_rain_today_sends_the_three_fields_cumulusmx_requires(self, monkeypatch):
         monkeypatch.setenv("ENABLE_WRITE_TOOLS", "true")
-        with patch.object(server, "_post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = '{"result":"Success"}'
-            res = await server.edit_rain_today(12.4, 5.2)
-            assert res == '{"result":"Success"}'
-            mock_post.assert_called_once_with(
-                "/api/edit/raintoday",
-                data={"raintoday": "12.400", "midnightrain": "5.200"},
-            )
+        current = {"raintoday": "0.0", "midnightrain": "3.1", "rainratetoday": "1.2"}
+        with patch.object(server, "_json", new_callable=AsyncMock, return_value=current), \
+             patch.object(server, "_post", new_callable=AsyncMock, return_value='{"raintoday":"12.4"}') as mock_post:
+            res = json.loads(await server.edit_rain_today(12.4, 5.2))
+        assert res["respuesta"] == '{"raintoday":"12.4"}'
+        mock_post.assert_called_once_with("/api/edit/raintoday",
+                                          data={"raintoday": "12.400", "midnightrain": "5.200", "rainratetoday": "1.200"})
 
     @pytest.mark.asyncio
-    async def test_edit_rain_today_fetches_midnight_if_omitted(self, monkeypatch):
+    async def test_edit_rain_today_keeps_current_midnight_and_rate_when_omitted(self, monkeypatch):
         monkeypatch.setenv("ENABLE_WRITE_TOOLS", "true")
-        with patch.object(server, "_json", new_callable=AsyncMock) as mock_json, \
-             patch.object(server, "_post", new_callable=AsyncMock) as mock_post:
-            mock_json.return_value = {"midnightrain": "3.10"}
-            mock_post.return_value = '{"result":"Success"}'
+        current = {"raintoday": "0.0", "midnightrain": "3.10", "rainratetoday": "0.4"}
+        with patch.object(server, "_json", new_callable=AsyncMock, return_value=current), \
+             patch.object(server, "_post", new_callable=AsyncMock, return_value='{"raintoday":"8.0"}') as mock_post:
+            await server.edit_rain_today(8.0)
+        assert mock_post.call_args.kwargs["data"] == {"raintoday": "8.000", "midnightrain": "3.100", "rainratetoday": "0.400"}
 
+    @pytest.mark.asyncio
+    async def test_edit_rain_today_reports_when_cumulusmx_ignores_the_change(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_WRITE_TOOLS", "true")
+        current = {"raintoday": "0.0", "midnightrain": "0.0", "rainratetoday": "0.0"}
+        with patch.object(server, "_json", new_callable=AsyncMock, return_value=current), \
+             patch.object(server, "_post", new_callable=AsyncMock, return_value='{"raintoday":"0.0"}'):
             res = await server.edit_rain_today(8.0)
-            assert res == '{"result":"Success"}'
-            mock_json.assert_once_with("/api/edit/raintodayeditdata.json") if hasattr(mock_json, "assert_once_with") else mock_json.assert_called_once_with("/api/edit/raintodayeditdata.json")
-            mock_post.assert_called_once_with(
-                "/api/edit/raintoday",
-                data={"raintoday": "8.000", "midnightrain": "3.100"},
-            )
+        assert res.startswith("ERROR") and "no aplicó" in res
 
     @pytest.mark.asyncio
     async def test_edit_diary(self, monkeypatch):
