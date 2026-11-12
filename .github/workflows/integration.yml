@@ -67,7 +67,7 @@ jobs:
           cd cmx
           # el zip puede traer todo dentro de una carpeta
           if [ ! -f CumulusMX.dll ]; then d=$(dirname "$(find . -name CumulusMX.dll | head -1)"); cd "$d"; fi
-          pwd > ../cmx-dir.txt
+          pwd > "$GITHUB_WORKSPACE/cmx-dir.txt"
           cat > Cumulus.ini <<'EOF'
           [Station]
           Type=17
