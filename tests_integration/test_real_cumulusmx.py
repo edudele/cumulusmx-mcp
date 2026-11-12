@@ -467,6 +467,21 @@ def perturb(node, path=()):
     return None
 
 
+def diff_paths(a, b, path=()):
+    """Rutas hoja donde dos JSON difieren, con los dos valores (recortados): para que un fallo se entienda sin abrir el artefacto."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        out = []
+        for key in sorted(set(a) | set(b), key=str):
+            out += diff_paths(a.get(key), b.get(key), path + (key,))
+        return out
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        out = []
+        for i, (x, y) in enumerate(zip(a, b)):
+            out += diff_paths(x, y, path + (i,))
+        return out
+    return [] if a == b else [f"{'/'.join(map(str, path))}: {str(a)[:90]!r} != {str(b)[:90]!r}"]
+
+
 def nested(path, value) -> dict:
     for key in reversed(path):
         value = {key: value}
@@ -494,7 +509,8 @@ async def test_every_settings_section_survives_update_and_restore(client):
         out = await restore(client, res["copia_id"])
         assert out.get("aplicado") is True, (section, out)
         after = json.loads(await call(client, "get_settings", section=section))
-        assert blank_as_none(after) == blank_as_none(before), f"{section}: la sección restaurada difiere de la original"
+        assert blank_as_none(after) == blank_as_none(before), \
+            f"{section}: la sección restaurada difiere (tras cambiar {'/'.join(map(str, path))}): {diff_paths(blank_as_none(before), blank_as_none(after))[:6]}"
         exercised.append(section)
     assert len(exercised) >= 8, f"demasiadas secciones sin probar: solo {exercised}"
 
