@@ -140,7 +140,12 @@ async def _settings_update(section: str, settings: dict[str, Any] | str, dry_run
 
 
 def _same_setting(wanted: Any, actual: Any) -> bool:
-    """Igualdad tolerante: CumulusMX devuelve vacío como null o "" y los números a veces como texto."""
+    """Igualdad tolerante: CumulusMX devuelve vacío como null o "" y los números a veces como texto, y recorta los espacios
+    de los extremos de sus textos al guardarlos (" x" se guarda como "x")."""
+    if isinstance(wanted, str):
+        wanted = wanted.strip()
+    if isinstance(actual, str):
+        actual = actual.strip()
     if wanted in (None, "") and actual in (None, ""):
         return True
     try:

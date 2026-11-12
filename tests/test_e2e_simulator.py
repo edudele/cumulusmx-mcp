@@ -283,6 +283,13 @@ class TestBackupsAndRestore:
         assert res["aplicado"] is False and list(res["no_guardados"]) == ["server"] and "NO guardó" in res["aviso"]
         assert res["no_guardados"]["server"]["pedido"] == "otro-broker"
 
+    def test_setting_comparison_tolerates_what_cumulusmx_normalizes(self):
+        from cumulusmx_mcp import settings_engine as se
+        assert se._same_setting(" -ci", "-ci") and se._same_setting("x ", "x")      # recorta espacios en los extremos
+        assert se._same_setting("", None) and se._same_setting(None, " ")          # vacío == null
+        assert se._same_setting(5, "5.0") and se._same_setting(True, True)
+        assert not se._same_setting("a", "b") and not se._same_setting(1, 2)
+
     @pytest.mark.asyncio
     async def test_list_and_get_backup_tools(self, sim):
         a = json.loads(await server.update_mqtt_settings({"server": "b1"}))["copia_id"]
