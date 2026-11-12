@@ -147,29 +147,56 @@ async def edit_recent_data(action: Literal["Edit", "Delete"], values: list[str |
     return await _edit_recent(action, values)
 
 
+MEMORY_ONLY_KEY = 0     # clave con la que CumulusMX lista las sentencias que solo tiene en memoria (fallos de conexión)
+
+
 async def _edit_mysql_cache(action: str, keys: list[int], statements: list[str] | None) -> str:
-    """CumulusMX: Edit usa SOLO la primera clave y sentencia; Delete recorre `keys` Y `statements` (sin statements da 500)."""
+    """Implementación de edit_mysql_cache (también la usa restore_backup).
+
+    CumulusMX: Edit usa SOLO la primera clave y sentencia; Delete recorre `keys` Y `statements` (sin statements da 500).
+    Las sentencias que fallaron por no poder CONECTAR con MySQL solo están en memoria (clave 0, no en su SQLite) y el editor
+    de CumulusMX recarga la caché desde SQLite tras cada cambio: las descartaría todas. Por eso no se edita nada mientras
+    haya sentencias de ese tipo, y después de escribir se comprueba que la caché refleja el cambio."""
     _check_action(action)
     if not keys:
         raise ValueError("keys no puede estar vacío")
-    if action == "Edit":
-        if len(keys) != 1 or not statements or len(statements) != 1:
-            raise ValueError("Edit actúa sobre una sola sentencia: pasa exactamente 1 clave y 1 statement")
-    originals = await capture.mysql_cache_statements(keys) if (backups.enabled() or not statements) else {}
+    if action == "Edit" and (len(keys) != 1 or not statements or len(statements) != 1):
+        raise ValueError("Edit actúa sobre una sola sentencia: pasa exactamente 1 clave y 1 statement")
+    cache = await capture.mysql_cache_all()
+    if cache is None:
+        raise ValueError("No se pudo leer la caché MySQL de CumulusMX; no se envía nada")
+    memory_only = [s for k, s in cache if k == MEMORY_ONLY_KEY]
+    if memory_only:
+        raise ValueError(
+            f"La caché MySQL tiene {len(memory_only)} sentencia(s) que CumulusMX solo guarda en memoria (fallaron al conectar "
+            "con MySQL; clave 0). Su editor recarga la caché desde disco tras cualquier cambio y las descartaría todas, así que "
+            "no se modifica nada. Restablece la conexión con MySQL para que se reenvíen solas, o descártalas con purgemysql.")
+    originals: dict[int, str] = {}
+    for key, statement in cache:
+        originals.setdefault(key, statement)
+    missing = [k for k in keys if k not in originals]
+    if missing:
+        raise ValueError(f"No se encontraron en la caché MySQL las claves {missing}; no se envía nada")
     if action == "Delete":
         if statements is None:                       # CumulusMX las exige: se leen de la propia caché
-            missing = [k for k in keys if k not in originals]
-            if missing:
-                raise ValueError(f"No se encontraron en la caché MySQL las claves {missing}; no se borra nada")
             statements = [originals[k] for k in keys]
         elif len(statements) != len(keys):
             raise ValueError("Delete requiere un statement por cada clave (o ninguno, y se leen de la caché)")
-    body_extra: dict[str, Any] = {"keys": keys, "statements": statements}
-    payload = _editor_payload(action, **body_extra)
-    items = [{"key": k, "statement": originals[k]} for k in keys if k in originals]
+    payload = _editor_payload(action, keys=keys, statements=statements)
+    items = [{"key": k, "statement": originals[k]} for k in keys]
     backup_id = backups.save("mysqlcache", "-".join(map(str, keys))[:40], {"items": items, "accion": action},
-                             "edit_mysql_cache") if items else None
+                             "edit_mysql_cache")
     response = await client._post("/api/edit/mysqlcache", content=payload, headers=settings_engine.JSON_HEADERS)
+    if response.startswith("ERROR"):
+        return _envelope(response, backup_id, "la sentencia")
+    after = dict((await capture.mysql_cache_all() or [])[::-1])      # la primera aparición de cada clave gana
+    if action == "Edit":
+        applied = after.get(keys[0]) == statements[0]
+    else:
+        applied = not any(k in after for k in keys)
+    if not applied:
+        return (f"ERROR: CumulusMX respondió ({response[:80]!r}) pero la caché MySQL no refleja el cambio ({action} de "
+                f"{keys}). Copia previa: {backup_id}.")
     return _envelope(response, backup_id, "la sentencia")
 
 
@@ -178,7 +205,8 @@ async def edit_mysql_cache(action: Literal["Edit", "Delete"], keys: list[int], s
     """Edita o borra comandos SQL pendientes en la caché de reintentos de MySQL (ver mysql_cache). Edit: exactamente 1 clave y
     1 statement nuevo (CumulusMX solo procesa el primero). Delete: una o varias claves; las sentencias (que CumulusMX exige)
     se leen de la propia caché si no las indicas. Guarda antes una copia de las sentencias (copia_id; una edición es
-    restaurable)."""
+    restaurable) y comprueba después que la caché cambió. Se niega mientras la caché tenga sentencias que CumulusMX solo
+    guarda en memoria (clave 0: fallos de conexión), porque su editor las descartaría todas."""
     return await _edit_mysql_cache(action, keys, statements)
 
 

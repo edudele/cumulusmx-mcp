@@ -34,7 +34,7 @@ services:
 
   mcp-sandbox:
     container_name: cumulusmx-mcp-sandbox
-    image: edudele/cumulusmx-mcp:1.8.2      # fija la versión; ":latest" cambia sin avisar
+    image: edudele/cumulusmx-mcp:1.8.3      # fija la versión; ":latest" cambia sin avisar
     restart: unless-stopped
     user: "1000:1000"                       # el usuario de abajo debe poder escribir en la carpeta de datos (ver README)
     environment:

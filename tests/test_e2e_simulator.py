@@ -5,7 +5,7 @@ cultura regional...), de modo que un error de formato se manifiesta como un valo
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -237,6 +237,34 @@ class TestBackupsAndRestore:
         res = json.loads(await server.edit_mysql_cache("Delete", [7]))
         assert [r[0] for r in sim.mysqlcache] == [8] and "ERROR" not in res["respuesta"]
         assert json.loads(await server.restore_backup(res["copia_id"], dry_run=False))["aplicado"] is False   # no reinsertable
+
+    @pytest.mark.asyncio
+    async def test_mysql_cache_with_memory_only_statements_is_not_touched(self, sim):
+        """Con CumulusMX real: las sentencias de fallos de CONEXIÓN solo están en memoria (clave 0) y su editor las descarta
+        al recargar la caché desde disco. El MCP no modifica nada mientras existan."""
+        sim.mysqlcache_memory = [[0, "UPDATE Dayfile SET HighWindGust=34 WHERE LogDate='2026-11-10';"]]
+        with pytest.raises(ValueError, match="solo guarda en memoria"):
+            await server.edit_mysql_cache("Edit", [7], ["INSERT INTO Monthly VALUES (9)"])
+        with pytest.raises(ValueError, match="purgemysql"):
+            await server.edit_mysql_cache("Delete", [0])
+        assert len(sim.mysqlcache) == 2 and len(sim.mysqlcache_memory) == 1
+        assert not [r for r in sim.requests if r[1] == "/api/edit/mysqlcache"]
+
+    @pytest.mark.asyncio
+    async def test_mysql_cache_edit_is_verified_after_writing(self, sim):
+        res = json.loads(await server.edit_mysql_cache("Edit", [8], ["INSERT INTO Monthly VALUES (99)"]))
+        assert res["copia_id"] and sim.mysqlcache[1][1] == "INSERT INTO Monthly VALUES (99)"
+        out = json.loads(await server.restore_backup(res["copia_id"], dry_run=False))
+        assert out["aplicado"] is True and sim.mysqlcache[1][1] == "INSERT INTO Monthly VALUES (2)"
+
+    @pytest.mark.asyncio
+    async def test_mysql_cache_edit_that_cumulusmx_ignores_is_an_error(self, sim):
+        """Si tras escribir la caché no refleja el cambio, se devuelve ERROR (con la copia) en vez de dar por buena la edición."""
+        from cumulusmx_mcp import capture
+        unchanged = [(7, "INSERT INTO Monthly VALUES (1)"), (8, "INSERT INTO Monthly VALUES (2)")]
+        with patch.object(capture, "mysql_cache_all", new=AsyncMock(return_value=unchanged)):
+            res = await server.edit_mysql_cache("Edit", [7], ["INSERT INTO Monthly VALUES (5)"])
+        assert res.startswith("ERROR") and "no refleja el cambio" in res and "Copia previa: 2" in res
 
     @pytest.mark.asyncio
     async def test_mysql_cache_delete_of_unknown_key_changes_nothing(self, sim):

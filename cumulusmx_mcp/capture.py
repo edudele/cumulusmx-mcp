@@ -66,23 +66,30 @@ async def recent_row(timestamp: str) -> list[Any] | None:
         return None
 
 
-async def mysql_cache_statements(keys: list[int]) -> dict[int, str]:
-    """Sentencias de la caché MySQL para esas claves (recorre las páginas). Faltan las claves que no existen."""
-    found: dict[int, str] = {}
+async def mysql_cache_all() -> list[tuple[int, str]] | None:
+    """Toda la caché MySQL de CumulusMX como [(clave, sentencia)], recorriendo las páginas. None si no se pudo leer."""
+    out: list[tuple[int, str]] = []
     try:
         start = 0
-        while len(found) < len(set(keys)):
+        while True:
             data = await client._json("/api/data/mysqlcache.json", {"draw": 1, "start": start, "length": 500,
                                                                     "search[value]": ""})
             rows = data.get("data", []) if isinstance(data, dict) else []
-            for key, statement in rows:
-                if int(key) in keys:
-                    found[int(key)] = statement
+            out += [(int(key), statement) for key, statement in rows]
             start += 500
             if not rows or start >= int(data.get("recordsTotal", 0)):
-                break
+                return out
     except Exception as exc:
         logger.warning("No se pudo leer la caché MySQL: %s", exc)
+        return None
+
+
+async def mysql_cache_statements(keys: list[int]) -> dict[int, str]:
+    """Sentencias de la caché MySQL para esas claves. Faltan las claves que no existen."""
+    found: dict[int, str] = {}
+    for key, statement in await mysql_cache_all() or []:
+        if key in keys:
+            found.setdefault(key, statement)
     return found
 
 

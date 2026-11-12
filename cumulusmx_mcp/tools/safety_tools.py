@@ -31,8 +31,9 @@ def _plan(record: dict) -> tuple[str, dict, object] | tuple[str, None, str]:
     kind, target, content = record["tipo"], record["objetivo"], record["contenido"]
     deleted = isinstance(content, dict) and content.get("accion") == "Delete"
     if kind == "settings":
-        return "update_settings(replace)", {"section": target}, lambda dry: settings_engine._settings_update(
-            target, content, dry_run=dry, replace=True)
+        return "update_settings(replace)", {"section": target}, lambda dry: (
+            settings_engine._settings_update(target, content, dry_run=True, replace=True) if dry
+            else settings_engine._restore_section(target, content))
     if kind == "rain" and "raintoday" in content:
         args = {k: float(content[k]) for k in ("raintoday", "midnightrain", "rainratetoday")}
         return "edit_rain_today", args, lambda dry: maintenance._edit_rain_today(**args)

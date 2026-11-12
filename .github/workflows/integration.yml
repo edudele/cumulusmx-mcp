@@ -27,6 +27,19 @@ jobs:
       fail-fast: false
       matrix:
         lang: ["es-ES"]        # la estación real usa coma decimal; en-GB se añade cuando es-ES esté estable
+    services:
+      mariadb:                 # MySQL de verdad para mysql_table, la caché de reintentos y 'update on edit'
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci-root
+          MARIADB_DATABASE: cumulus
+          MARIADB_USER: cumulus
+          MARIADB_PASSWORD: cumulus
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,7 +55,7 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Install the MCP
-        run: pip install ".[dev]"
+        run: pip install ".[dev]" aiosmtpd pyftpdlib pymysql   # servidores SMTP/FTP de prueba y cliente MySQL de los tests
 
       - name: Download the official CumulusMX release
         env:
@@ -117,6 +130,8 @@ jobs:
       - name: Run the integration tests against the real CumulusMX
         env:
           CUMULUSMX_REAL_URL: http://127.0.0.1:8998
+          CUMULUSMX_MYSQL_HOST: 127.0.0.1
+          CUMULUSMX_MYSQL_PORT: "3306"
         run: |
           set -euo pipefail
           export CUMULUSMX_DATA_DIR="$(cat cmx-dir.txt)/data"

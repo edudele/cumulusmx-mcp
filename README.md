@@ -158,7 +158,7 @@ If backups are enabled but cannot be written, the MCP refuses to change anything
 An unauthenticated health check endpoint is exposed at `http://localhost:8000/health` (or `/health` on your host/proxy). It returns:
 
 ```json
-{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.8.2"}
+{"status": "healthy", "service": "cumulusmx-mcp", "version": "1.8.3"}
 ```
 
 The Docker container includes a native `HEALTHCHECK` directive verifying this endpoint with Python's standard `urllib.request`.

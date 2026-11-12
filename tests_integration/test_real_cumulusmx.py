@@ -9,6 +9,7 @@
 import datetime as dt
 import itertools
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -197,25 +198,18 @@ WRITE_COVERED = {
     "clear_error_log": "test_maintenance_tools",
     "generate_reports": "test_generate_reports",
     "station_input": "test_station_input_reports_a_clean_error",
+    "mysql_table": "test_mysql_tools_against_a_real_mariadb",
+    "edit_mysql_cache": "test_mysql_cache_tools_against_a_real_mariadb",
+    "purgemysql": "test_mysql_cache_tools_against_a_real_mariadb",
+    "test_email": "test_email_through_a_real_smtp_server",
+    "trigger_ftp": "test_uploads_through_a_real_ftp_server",
+    "upload_reports": "test_uploads_through_a_real_ftp_server",
 }
 
-# Lo que NO puede probarse contra el Simulator, con el motivo. Se llaman igualmente: deben fallar con un mensaje, no con una excepción.
-EXCLUDED = {
-    "edit_mysql_cache": "necesita comandos pendientes en la caché de MySQL (no hay MySQL); cubierto por el simulador de tests/",
-    "mysql_table": "necesita un servidor MySQL real; cubierto por el simulador de tests/",
-    "purgemysql": "necesita un servidor MySQL real",
-    "test_email": "necesita un servidor SMTP real",
-    "trigger_ftp": "necesita un servidor FTP real",
-    "upload_reports": "necesita un servidor FTP real",
-}
-GRACEFUL_CALLS = {
-    "edit_mysql_cache": dict(action="Delete", keys=[1]),
-    "mysql_table": dict(action="create", table="monthly"),
-    "purgemysql": {},
-    "test_email": dict(from_email="a@example.com", dest_email="b@example.com"),
-    "trigger_ftp": {},
-    "upload_reports": dict(report_type="month"),
-}
+# Lo que NO puede probarse contra el Simulator, con el motivo. Hoy nada: MySQL (MariaDB del workflow), correo (servidor SMTP
+# local) y FTP (servidor FTP local) se prueban de verdad al final de este fichero.
+EXCLUDED: dict[str, str] = {}
+GRACEFUL_CALLS: dict[str, dict] = {}
 
 
 async def test_every_tool_is_accounted_for(client, seed):
@@ -649,15 +643,190 @@ async def test_station_input_reports_a_clean_error(client):
     assert "503" in out or "not running" in out.lower() or "ERROR" in out, out      # el Simulator no es una estación HTTP
 
 
-@pytest.mark.parametrize("tool", sorted(EXCLUDED))
-async def test_tools_that_need_external_services_fail_cleanly(client, tool):
-    result = await client.call_tool(tool, GRACEFUL_CALLS[tool], raise_on_error=False)
-    text = text_of(result)
-    assert text.strip(), f"{tool}: sin respuesta"
-    assert "Traceback" not in text, text[:500]
-
-
 async def test_audit_log_recorded_the_writes(client):
     log = json.loads(await call(client, "get_audit_log", limit=500))
     tools = {r["herramienta"] for r in log["registros"]}
     assert {"edit_dayfile", "edit_datalog", "restore_backup"} <= tools, tools
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# 6. Servicios externos de verdad: MariaDB (servicio del workflow), SMTP y FTP (servidores locales arrancados aquí)
+# --------------------------------------------------------------------------------------------------------------------
+
+MYSQL = {"host": os.environ.get("CUMULUSMX_MYSQL_HOST", ""), "port": int(os.environ.get("CUMULUSMX_MYSQL_PORT", "3306")),
+         "user": "cumulus", "pass": "cumulus", "database": "cumulus"}
+needs_mysql = pytest.mark.skipif(not MYSQL["host"], reason="define CUMULUSMX_MYSQL_HOST (el workflow arranca MariaDB)")
+
+
+def sql(query: str):
+    import pymysql
+
+    con = pymysql.connect(host=MYSQL["host"], port=MYSQL["port"], user=MYSQL["user"], password=MYSQL["pass"],
+                          database=MYSQL["database"], autocommit=True)
+    try:
+        with con.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+    finally:
+        con.close()
+
+
+async def mysql_on(client, host: str | None = None):
+    res = envelope(await call(client, "update_mysql_settings", dry_run=False, settings={
+        "server": {**{k: MYSQL[k] for k in ("port", "user", "pass", "database")}, "host": host or MYSQL["host"]},
+        "options": {"updateonedit": True, "bufferonerror": True},
+        "monthly": {"enabled": True}, "dayfile": {"enabled": True}, "realtime": {"enabled": True}}))
+    assert res.get("aplicado") is True or not res.get("campos_modificados"), res
+    return res
+
+
+async def first_dayfile_row(client) -> list[str]:
+    return [str(v) for v in json.loads(await call(client, "dayfile", start=0, length=1))["data"][0]]
+
+
+async def cache_rows(client) -> list:
+    return json.loads(await call(client, "mysql_cache"))["data"]
+
+
+@needs_mysql
+async def test_mysql_tools_against_a_real_mariadb(client):
+    before = json.loads(await call(client, "get_settings", section="mysql"))
+    configured = await mysql_on(client)
+    for table in ("monthly", "dayfile", "realtime"):
+        out = await call(client, "mysql_table", action="create", table=table)
+        assert "already exists" in out or "rror" not in out, (table, out)
+        assert "rror" not in await call(client, "mysql_table", action="update", table=table), table
+    tables = {row[0].lower() for row in sql("SHOW TABLES")}
+    assert {"monthly", "dayfile", "realtime"} <= tables, tables
+    # una edición del histórico con 'update on edit' llega a MariaDB sin quedarse en la caché de reintentos
+    row = await first_dayfile_row(client)
+    res = envelope(await call(client, "edit_dayfile", action="Edit", line=int(row[0]), values=row[1:]))
+    assert res["copia_id"] and not await cache_rows(client), "la sentencia no llegó a MariaDB"
+    if configured.get("copia_id"):
+        out = await restore(client, configured["copia_id"])
+        assert out.get("aplicado") is True, out
+        assert json.loads(await call(client, "get_settings", section="mysql"))["server"]["host"] == before["server"]["host"]
+
+
+@needs_mysql
+async def test_mysql_cache_tools_against_a_real_mariadb(client):
+    """Las dos clases de sentencias pendientes de CumulusMX:
+    - fallo de CONEXIÓN: solo en memoria (clave 0); el MCP se niega a editarlas (el editor de CumulusMX las perdería) y
+      purgemysql las descarta;
+    - error de la CONSULTA (tabla inexistente): guardadas en disco con su clave; se editan, se restauran y se borran."""
+    await mysql_on(client)
+    await call(client, "mysql_table", action="create", table="dayfile")
+    await call(client, "purgemysql")
+    row = await first_dayfile_row(client)
+    line, values = int(row[0]), row[1:]
+
+    # a) error de consulta: la tabla no existe -> CumulusMX guarda la sentencia en su SQLite con una clave real
+    sql("DROP TABLE IF EXISTS Dayfile")
+    envelope(await call(client, "edit_dayfile", action="Edit", line=line, values=values))
+    rows = await cache_rows(client)
+    assert rows and all(int(k) > 0 for k, _ in rows), rows
+    key, statement = int(rows[0][0]), rows[0][1]
+    edited = statement.replace("UPDATE", "UPDATE /* ci */", 1)
+    res = envelope(await call(client, "edit_mysql_cache", action="Edit", keys=[key], statements=[edited]))
+    assert res["copia_id"] and dict((int(k), s) for k, s in await cache_rows(client))[key] == edited
+    out = await restore(client, res["copia_id"])
+    assert out.get("aplicado") is True and dict((int(k), s) for k, s in await cache_rows(client))[key] == statement, out
+    envelope(await call(client, "edit_mysql_cache", action="Delete", keys=[key]))
+    assert key not in {int(k) for k, _ in await cache_rows(client)}
+
+    # b) fallo de conexión: solo en memoria (clave 0)
+    await call(client, "mysql_table", action="create", table="dayfile")
+    await mysql_on(client, host="mysql.invalid")
+    envelope(await call(client, "edit_dayfile", action="Edit", line=line, values=values))
+    rows = await cache_rows(client)
+    assert any(int(k) == 0 for k, _ in rows), rows
+    refused = await client.call_tool("edit_mysql_cache", {"action": "Delete", "keys": [0]}, raise_on_error=False)
+    assert failed(refused) and "solo guarda en memoria" in text_of(refused), text_of(refused)
+    assert len(await cache_rows(client)) == len(rows), "el MCP tocó la caché pese a negarse"
+    assert "cleared" in (await call(client, "purgemysql")).lower()
+    assert not [r for r in await cache_rows(client) if int(r[0]) == 0]
+    await mysql_on(client)
+
+
+@pytest.fixture
+def smtp_server():
+    from aiosmtpd.controller import Controller
+
+    received = []
+
+    class Handler:
+        async def handle_DATA(self, server, session, envelope):
+            received.append(envelope)
+            return "250 OK"
+
+    controller = Controller(Handler(), hostname="127.0.0.1", port=2525)
+    controller.start()
+    try:
+        yield received
+    finally:
+        controller.stop()
+
+
+async def test_email_through_a_real_smtp_server(client, smtp_server):
+    res = json.loads(await call(client, "update_settings", section="internet", dry_run=False, settings={
+        "emailsettings": {"enabled": True, "server": "127.0.0.1", "port": 2525, "ssloption": 0, "authenticate": 0}}))
+    assert res.get("aplicado") is True, res
+    out = await call(client, "test_email", from_email="ci@example.com", dest_email="dest@example.com")
+    assert not out.startswith("ERROR"), out
+    assert smtp_server and smtp_server[0].rcpt_tos == ["dest@example.com"], smtp_server
+    after = json.loads(await call(client, "restore_backup", backup_id=res["copia_id"], dry_run=False))
+    assert after.get("aplicado") is True and not after.get("no_guardados"), after
+    email = json.loads(await call(client, "get_settings", section="internet"))["emailsettings"]
+    assert email["enabled"] is False and not (email.get("server") or "").strip(), email
+
+
+@pytest.fixture
+def ftp_server(tmp_path):
+    import threading
+
+    from pyftpdlib.authorizers import DummyAuthorizer
+    from pyftpdlib.handlers import FTPHandler
+    from pyftpdlib.servers import FTPServer
+
+    authorizer = DummyAuthorizer()
+    authorizer.add_user("ci", "ci", str(tmp_path), perm="elradfmwMT")
+    handler = type("Handler", (FTPHandler,), {"authorizer": authorizer, "passive_ports": range(30000, 30010)})
+    server_ = FTPServer(("127.0.0.1", 2121), handler)
+    thread = threading.Thread(target=server_.serve_forever, kwargs={"timeout": 0.5}, daemon=True)
+    thread.start()
+    try:
+        yield tmp_path
+    finally:
+        server_.close_all()
+
+
+async def wait_for_files(folder, pattern: str, seconds: int = 60) -> list:
+    import asyncio
+
+    for _ in range(seconds):
+        found = [p for p in folder.rglob(pattern) if p.is_file()]
+        if found:
+            return found
+        await asyncio.sleep(1)
+    return []
+
+
+async def test_uploads_through_a_real_ftp_server(client, ftp_server, seed):
+    res = json.loads(await call(client, "update_settings", section="internet", dry_run=False, settings={
+        "website": {"enabled": True, "hostname": "127.0.0.1", "ftpport": 2121, "sslftp": 0, "directory": "/",
+                    "username": "ci", "password": "ci", "advanced": {"activeftp": False}}}))
+    assert res.get("aplicado") is True, res
+    last = d(seed["dayfile_last"])
+    assert_ok_text("generate_reports", {}, await call(client, "generate_reports", report_type="month", year=last.year,
+                                                      month=last.month))
+    assert_ok_text("upload_reports", {}, await call(client, "upload_reports", report_type="month", year=last.year,
+                                                    month=last.month))
+    reports = await wait_for_files(ftp_server, "NOAAMO*")
+    assert reports, f"upload_reports no subió el informe NOAA: {[str(p) for p in ftp_server.rglob('*')]}"
+    assert_ok_text("trigger_ftp", {}, await call(client, "trigger_ftp", graphs=True))
+    graphs = await wait_for_files(ftp_server, "*.json")
+    assert graphs, f"trigger_ftp no subió los JSON de gráficas: {[str(p) for p in ftp_server.rglob('*')]}"
+    after = json.loads(await call(client, "restore_backup", backup_id=res["copia_id"], dry_run=False))
+    assert after.get("aplicado") is True and not after.get("no_guardados"), after
+    website = json.loads(await call(client, "get_settings", section="internet"))["website"]
+    assert website["enabled"] is False and not (website.get("hostname") or "").strip(), website

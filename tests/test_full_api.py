@@ -534,11 +534,15 @@ class TestDataEditors:
             await server.edit_recent_data("Edit", ["24/08/19 10:00", *row])     # la fecha en texto se descarta
             assert p.await_args.args[0] == "/api/edit/recentdata"
             assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "data": [[*row[:-1], "null"]]}
+            from cumulusmx_mcp import capture
+            cache_states = [[(7, "INSERT 0")], [(7, "INSERT 1")], [(7, "INSERT 1")], []]   # antes/después de Edit y de Delete
+            patch.object(capture, "mysql_cache_all", new=AsyncMock(side_effect=cache_states)).start()
             await server.edit_mysql_cache("Edit", [7], ["INSERT 1"])
             assert p.await_args.args[0] == "/api/edit/mysqlcache"
             assert json.loads(p.await_args.kwargs["content"]) == {"action": "Edit", "keys": [7], "statements": ["INSERT 1"]}
             await server.edit_mysql_cache("Delete", [7], ["INSERT 1"])
             assert json.loads(p.await_args.kwargs["content"]) == {"action": "Delete", "keys": [7], "statements": ["INSERT 1"]}
+            patch.stopall()
 
     @pytest.mark.asyncio
     async def test_editor_validations(self):
@@ -558,7 +562,9 @@ class TestDataEditors:
             await server.edit_mysql_cache("Edit", [], None)
         with pytest.raises(ValueError, match="exactamente 1 clave"):
             await server.edit_mysql_cache("Edit", [1, 2], ["solo uno"])
-        with pytest.raises(ValueError, match="un statement por cada clave"):
+        from cumulusmx_mcp import capture
+        with patch.object(capture, "mysql_cache_all", new=AsyncMock(return_value=[(1, "a"), (2, "b")])), \
+                pytest.raises(ValueError, match="un statement por cada clave"):
             await server.edit_mysql_cache("Delete", [1, 2], ["solo uno"])
 
     @pytest.mark.asyncio
@@ -699,3 +705,43 @@ class TestThroughMcpClient:
                     await c.call_tool("mysql_table", {"action": "drop", "table": "monthly"})
                 with pytest.raises(ToolError):
                     await c.call_tool("records_query", {"dataname": "HighTemp", "function": "max", "where": "; --"})
+
+
+# ---------------------------------------------------- hallazgos con la copia real de la estación ----
+
+class TestFindingsOnTheStationCopy:
+    @pytest.mark.asyncio
+    async def test_test_email_explains_the_missing_smtp_configuration(self):
+        reply = "ERROR HTTP 500 en /api/setsettings/testemail.json: Object reference not set to an instance of an object."
+        with patch.object(server, "_post", new=AsyncMock(return_value=reply)):
+            out = await server.test_email("a@example.invalid", "b@example.invalid")
+        assert out.startswith(reply) and "emailsettings" in out
+
+    @pytest.mark.asyncio
+    async def test_restoring_a_disabled_service_also_restores_its_fields(self, tmp_path):
+        """CumulusMX no guarda los campos de un servicio deshabilitado: restaurar «FTP apagado y sin servidor» dejaba el
+        servidor nuevo. La restauración lo hace en dos pasos (habilitar un instante, guardar y volver a deshabilitar)."""
+        import copy as _copy
+        import urllib.parse as _up
+        from cumulusmx_mcp import config, settings_engine
+
+        state = {"website": {"enabled": False, "hostname": "ftp.invalid"}, "emailsettings": {"enabled": False, "server": "x"}}
+
+        async def read(*_a, **_k):
+            return _copy.deepcopy(state)
+
+        async def write(_path, content="", **_k):
+            sent = json.loads(_up.unquote(content)[5:])
+            for name, sub in sent.items():
+                if isinstance(sub, dict) and "enabled" in sub:
+                    state[name]["enabled"] = sub["enabled"]
+                    if sub["enabled"]:                                  # solo con el servicio activo guarda sus campos
+                        state[name].update(sub)
+            return "success"
+
+        backup = {"website": {"enabled": False, "hostname": ""}, "emailsettings": {"enabled": False, "server": "x"}}
+        with patch.object(config, "BACKUP_DIR", str(tmp_path)), patch.object(server, "_json", new=read), \
+                patch.object(server, "_post", new=write):
+            out = json.loads(await settings_engine._restore_section("internet", backup))
+        assert state == backup, state
+        assert "dos pasos" in out["pasos"] and "website" in out["pasos"] and "emailsettings" not in out["pasos"]

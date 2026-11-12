@@ -76,7 +76,12 @@ async def test_email(
         "useHtml": use_html,
         "useBcc": use_bcc,
     })
-    return await client._post("/api/setsettings/testemail.json", content=payload, headers={"Content-Type": "application/json"})
+    response = await client._post("/api/setsettings/testemail.json", content=payload, headers={"Content-Type": "application/json"})
+    if "Object reference not set" in response:
+        # Visto con CumulusMX real: es lo que responde cuando no hay servidor SMTP configurado
+        response += (" -- CumulusMX responde esto cuando el correo no está configurado: revisa get_settings('internet') -> "
+                     "emailsettings (enabled, server, port) y vuelve a probar.")
+    return response
 
 
 @mcp.tool(annotations=READ_ONLY)

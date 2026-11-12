@@ -49,6 +49,9 @@ class FakeCumulus:
                                  [2, "24/08/19 10:10", "1566641400", "10,7", "61"]], True: []}
         self.recent = [self._recent_row("24/08/19 10:00", 1566640800, 10.5), self._recent_row("24/08/19 10:10", 1566641400, 10.7)]
         self.mysqlcache = [[7, "INSERT INTO Monthly VALUES (1)"], [8, "INSERT INTO Monthly VALUES (2)"]]
+        # Sentencias que fallaron por NO poder conectar con MySQL: CumulusMX solo las guarda en memoria (no en su SQLite), con
+        # clave 0, y su editor de la caché recarga la lista desde SQLite tras cada Edit/Delete, así que se pierden (visto en real).
+        self.mysqlcache_memory: list[list] = []
         self.temp = "10,0" if decimal_comma else "10.0"
         self.rain = {"raintoday": "0.0", "midnightrain": "0.0", "rainratetoday": "0.0"}
         self.created_tables: list[str] = []
@@ -178,7 +181,7 @@ class FakeCumulus:
         return self._page(self.recent, request)
 
     async def mysqlcache_get(self, request: Request) -> Response:
-        return self._page(self.mysqlcache, request)
+        return self._page(self.mysqlcache + self.mysqlcache_memory, request)
 
     async def edit_datalogs(self, request: Request) -> Response:
         body = await self._body(request)
@@ -237,6 +240,7 @@ class FakeCumulus:
                     row[1] = new["statements"][0]
         else:
             self.mysqlcache = [r for r in self.mysqlcache if r[0] not in new["keys"]]
+        self.mysqlcache_memory = []                             # ReloadFailedMySQLCommands: recarga solo lo que hay en disco
         return self._json({"errors": None})
 
     async def rain_get(self, request: Request) -> Response:

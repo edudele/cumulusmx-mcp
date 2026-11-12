@@ -5,6 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/). Releases are published as Docker images
 (`edudele/cumulusmx-mcp`) when a `vX.Y.Z` tag is pushed.
 
+## [1.8.3]
+
+Found by testing the MySQL, e-mail and FTP tools for real on a copy of a production station (and now in CI against MariaDB and
+local SMTP/FTP servers, so no tool is left tested only for "fails cleanly").
+
+### Fixed
+- **`edit_mysql_cache` could wipe the whole MySQL retry cache.** CumulusMX keeps the commands that failed because MySQL was
+  unreachable only in memory (key 0, not in its SQLite), and its cache editor reloads the cache from SQLite after any change, so
+  editing or deleting one entry silently discarded all of them while the tool reported success. The tool now refuses to change
+  anything while such entries exist (and says to restore the connection or use `purgemysql`), checks that the key exists, and
+  reads the cache back after writing: if the change is not there it returns `ERROR`.
+- **Restoring the settings of a disabled service left the newer values behind.** CumulusMX does not store the fields of a
+  disabled service, so restoring "FTP off, no server" turned FTP off but kept the server. `restore_backup` now detects it and
+  restores in two steps (enable for an instant so the fields are stored, then disable), and says so in `pasos`.
+- `test_email` explains CumulusMX's opaque "Object reference not set..." reply: it means the e-mail settings are not configured.
+
+### Added
+- The real-CumulusMX integration suite now runs MariaDB as a workflow service and starts local SMTP (aiosmtpd) and FTP
+  (pyftpdlib) servers: `mysql_table`, `edit_mysql_cache`, `purgemysql`, `test_email`, `trigger_ftp` and `upload_reports` are
+  tested end to end (tables created, statements cached/edited/restored/deleted, an e-mail received, reports and graph files
+  uploaded), and the settings are restored afterwards.
+
 ## [1.8.2]
 
 The MCP is now tested end to end against a **real CumulusMX** (official build 5026 with its Simulator station, locale `es-ES`), not

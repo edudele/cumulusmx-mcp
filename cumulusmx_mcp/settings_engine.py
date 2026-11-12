@@ -1,4 +1,5 @@
 """Motor genérico de ajustes: lectura-fusión-escritura con vista previa, enmascarado de secretos y formato de cuerpo."""
+import copy
 import json
 import urllib.parse
 from typing import Any, Literal
@@ -137,6 +138,37 @@ async def _settings_update(section: str, settings: dict[str, Any] | str, dry_run
             result["aplicado"] = False
             result["nota"] = result["aviso"]
     return json.dumps(result, ensure_ascii=False)
+
+
+async def _restore_section(section: str, content: dict[str, Any]) -> str:
+    """Restaura una sección completa desde su copia.
+
+    CumulusMX no guarda los campos de un servicio deshabilitado: si la copia tiene un servicio apagado cuyos campos cambiaron
+    después (p. ej. se activó FTP con otro servidor), al restaurar se apaga pero conserva los campos nuevos. En ese caso se
+    repite en dos pasos: se envía la copia con esos servicios habilitados (así guarda sus campos) y enseguida la copia tal cual."""
+    first = json.loads(await _settings_update(section, content, replace=True))
+    unsaved = first.get("no_guardados") or {}
+    if not unsaved or not isinstance(content, dict):
+        return json.dumps(first, ensure_ascii=False)
+    staged = copy.deepcopy(content)
+    toggled: list[str] = []
+    for path in unsaved:
+        node: Any = staged
+        parts = path.split(".")
+        for i, key in enumerate(parts[:-1]):
+            node = node.get(key) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                break
+            if node.get("enabled") is False:
+                node["enabled"] = True
+                toggled.append(".".join(parts[: i + 1]))
+    if not toggled:
+        return json.dumps(first, ensure_ascii=False)
+    await _settings_update(section, staged, replace=True)
+    final = json.loads(await _settings_update(section, content, replace=True))
+    final["pasos"] = (f"Restaurado en dos pasos: {sorted(set(toggled))} se habilitaron un instante para que CumulusMX guardara "
+                      "sus campos y se volvieron a deshabilitar, como en la copia.")
+    return json.dumps(final, ensure_ascii=False)
 
 
 def _same_setting(wanted: Any, actual: Any) -> bool:
