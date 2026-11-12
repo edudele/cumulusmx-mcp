@@ -372,3 +372,33 @@ class TestSimpleReportsAndExtraSensors:
                 from fastmcp.exceptions import ToolError
                 with pytest.raises(ToolError):
                     await client.call_tool("extra_sensors", {"sensor": "programdata"})
+
+
+class TestPressureSensorFault:
+    """Hallado con datos reales: la presión mínima de un día con el sensor caído quedaba como 0.0 hPa en los resúmenes."""
+
+    ROWS = [
+        {"_date": datetime.date(2025, 6, 10), "fecha": "2025-06-10", "pres_min": "1005.6", "pres_max": "1009.3", "temp_min": "8", "temp_max": "20"},
+        {"_date": datetime.date(2025, 6, 11), "fecha": "2025-06-11", "pres_min": "0.0", "pres_max": "1007.2", "temp_min": "9", "temp_max": "21"},
+        {"_date": datetime.date(2025, 6, 12), "fecha": "2025-06-12", "pres_min": "1001.4", "pres_max": "1005.6", "temp_min": "7", "temp_max": "19"},
+    ]
+
+    def test_aggregates_ignore_a_zero_pressure(self):
+        from cumulusmx_mcp import dayrows
+        agg = dayrows._agg(self.ROWS)
+        assert agg["pres_min"]["valor"] == 1001.4 and agg["pres_max"]["valor"] == 1009.3
+
+    def test_column_summary_ignores_a_zero_pressure(self):
+        from cumulusmx_mcp import dayrows
+        out = dayrows.summarize(self.ROWS, ["pres_min"])["metricas"]["pres_min"]
+        assert out["min"]["valor"] == 1001.4 and out["n_dias_con_dato"] == 2
+
+    def test_data_quality_flags_it(self):
+        from cumulusmx_mcp import analysis
+        problems = analysis.check_quality(self.ROWS)["valores_incoherentes"]["detalle"]
+        assert any(p["fecha"] == "2025-06-11" and "pres_min" in p["problema"] for p in problems)
+
+    def test_other_columns_keep_legitimate_zeros(self):
+        from cumulusmx_mcp import dayrows
+        rows = [{"_date": datetime.date(2025, 1, 1), "fecha": "2025-01-01", "lluvia_total": "0.0", "racha_max": "0.0"}]
+        assert dayrows._agg(rows)["dia_mas_lluvioso"]["valor"] == 0.0

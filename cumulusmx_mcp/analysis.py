@@ -144,7 +144,10 @@ def check_quality(rows: list[dict], max_items: int = 100) -> dict:
             if h is not None and h == 0:
                 flag(r, f"{name} = 0 % (posible fallo del sensor)")
         pmin, pmax = utils._num(r.get("pres_min")), utils._num(r.get("pres_max"))
-        if pmin is not None and pmax is not None and pmin > pmax:
+        for name, p in (("pres_min", pmin), ("pres_max", pmax)):
+            if p is not None and p <= 0:
+                flag(r, f"{name} = {p:g} (imposible: posible fallo del sensor; se ignora en los resúmenes)")
+        if pmin is not None and pmax is not None and pmin > pmax and pmin > 0:
             flag(r, f"pres_min ({pmin}) > pres_max ({pmax})")
         for name in ("lluvia_total", "horas_sol"):
             v = utils._num(r.get(name))

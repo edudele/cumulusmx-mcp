@@ -186,12 +186,22 @@ async def _all_dayfile() -> list[dict]:
     return await _get_dayfile_rows(start_year=2000, end_year=2050)
 
 
+# Valores físicamente imposibles que se guardan cuando un sensor falla (p. ej. presión 0 hPa en tu estación el 11/06/2025 y el
+# 03/11/2025): se tratan como "sin dato" en los agregados, y data_quality los señala. Vale para cualquier unidad de presión.
+MUST_BE_POSITIVE = ("pres_min", "pres_max")
+
+
+def _plausible(col: str, value: float) -> bool:
+    return value > 0 if col in MUST_BE_POSITIVE else True
+
+
 def _agg(rows: list[dict]) -> dict:
     if not rows:
         return {"dias": 0}
 
     def ext(col, fn):
-        vals = [(utils._num(r.get(col)), r["_date"]) for r in rows if utils._num(r.get(col)) is not None]
+        vals = [(utils._num(r.get(col)), r["_date"]) for r in rows
+                if utils._num(r.get(col)) is not None and _plausible(col, utils._num(r.get(col)))]
         if not vals:
             return None
         v = fn(vals, key=lambda x: x[0])
@@ -218,7 +228,7 @@ def _valid(rows: Iterable[dict], var: str) -> list[tuple[str, float]]:
     for r in rows:
         v = utils._num(r.get(var))
         f = r.get("fecha")
-        if v is not None and f:
+        if v is not None and f and _plausible(var, v):
             out.append((str(f), v))
     return out
 
