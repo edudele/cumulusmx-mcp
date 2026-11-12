@@ -251,12 +251,20 @@ class TestBackupsAndRestore:
         assert res["aplicado"] is True and res["copia_id"] is None and "aviso" not in res
 
     @pytest.mark.asyncio
-    async def test_backup_failure_warns_but_does_not_block(self, sim, tmp_path):
+    async def test_backup_failure_refuses_to_write(self, sim, tmp_path):
+        """Si las copias están activadas pero no se pueden guardar, NO se escribe (se vio en un despliegue con el volumen sin
+        permisos: las ediciones se aplicaban y luego no había forma de deshacerlas)."""
         blocked = tmp_path / "file"
         blocked.write_text("x")                                        # un fichero donde debería haber un directorio
+        before = json.loads(await server.get_settings("mqtt"))
+        row = list(sim.dayfile[0]) if hasattr(sim, "dayfile") else None
         with patch.object(config, "BACKUP_DIR", str(blocked / "sub")):
-            res = json.loads(await server.update_mqtt_settings({"server": "broker"}))
-        assert res["aplicado"] is True and res["copia_id"] is None and "No se pudo guardar la copia" in res["aviso"]
+            with pytest.raises(backups.BackupError, match="NO se ha modificado nada"):
+                await server.update_mqtt_settings({"server": "broker"})
+            with pytest.raises(backups.BackupError):
+                await server.edit_dayfile("Edit", 1, ["24/08/19", "1"])
+        assert json.loads(await server.get_settings("mqtt")) == before, "se escribió aunque no había copia"
+        assert row is None or list(sim.dayfile[0]) == row
 
     @pytest.mark.asyncio
     async def test_list_and_get_backup_tools(self, sim):

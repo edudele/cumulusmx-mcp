@@ -25,8 +25,15 @@ def _dir() -> str:
     return config.BACKUP_DIR
 
 
+class BackupError(ValueError):
+    """Las copias están activadas pero no se pudo guardar una: la escritura no se hace (no se podría deshacer)."""
+
+
 def save(kind: str, target: str, payload: Any, tool: str) -> str | None:
-    """Guarda una copia y devuelve su id. Devuelve None (y lo registra) si está desactivado o falla: no bloquea la operación."""
+    """Guarda una copia y devuelve su id. Devuelve None solo si las copias están desactivadas (CUMULUS_BACKUP_DIR=none).
+
+    Si están activadas y falla (p. ej. el volumen no es escribible por el usuario del contenedor) lanza BackupError: una
+    corrección de datos que luego no se puede deshacer es peor que no hacerla, y avisar después no sirve de nada."""
     if not enabled():
         return None
     try:
@@ -42,7 +49,10 @@ def save(kind: str, target: str, payload: Any, tool: str) -> str | None:
         return backup_id
     except Exception as exc:
         logger.error("No se pudo guardar la copia previa (%s %s): %s", kind, target, exc)
-        return None
+        raise BackupError(
+            f"No se puede guardar la copia previa en {config.BACKUP_DIR} ({type(exc).__name__}: {exc}); NO se ha modificado nada. "
+            "Comprueba que el usuario del contenedor puede escribir en ese volumen, o desactiva las copias con "
+            "CUMULUS_BACKUP_DIR=none (entonces las escrituras no se podrán deshacer).") from exc
 
 
 def _files() -> list[str]:
