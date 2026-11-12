@@ -147,6 +147,9 @@ async def _json(path: str, params: dict | None = None):
     try:
         r = await _request_get(path, params)
         r.raise_for_status()
+        if not r.content.strip():
+            raise ValueError(f"CumulusMX devolvió una respuesta vacía en {path}. En una instalación recién estrenada (el día de "
+                             "inicio de registros es hoy) CumulusMX aún no devuelve el histórico; si no es el caso, revisa su log.")
         return r.json()
     except httpx.HTTPStatusError as e:
         raise ValueError(f"HTTP {e.response.status_code} en {path}: {e.response.text[:200]}")

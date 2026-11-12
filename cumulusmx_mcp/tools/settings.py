@@ -148,7 +148,12 @@ async def mysql_table(action: Literal["create", "update"], table: Literal["month
         raise ValueError("action: create|update; table: monthly|dayfile|realtime")
     if (err := safety._check_write_enabled()):
         return err
-    return await client._post(f"/api/setsettings/{action}{table}sql.json")
+    response = await client._post(f"/api/setsettings/{action}{table}sql.json")
+    if not response.strip():            # CumulusMX contesta 200 sin contenido, p. ej. con MySQL sin configurar o la tabla no habilitada
+        return ("ERROR: CumulusMX respondió sin contenido, así que no se puede confirmar que la tabla se "
+                f"{'creara' if action == 'create' else 'actualizara'}. Comprueba la conexión y que la tabla esté habilitada "
+                "(get_mysql_settings) y revisa el log de CumulusMX.")
+    return response
 
 
 @mcp.tool(annotations=READ_ONLY)

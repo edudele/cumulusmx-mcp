@@ -1300,3 +1300,22 @@ class TestCheckCumulusConnection:
 
 
 
+
+
+class TestEmptyReplies:
+    """CumulusMX responde 200 sin cuerpo en algunos casos (p. ej. /api/data/dayfile el primer día de una instalación nueva)."""
+
+    @pytest.mark.asyncio
+    async def test_json_helper_explains_an_empty_body(self):
+        import httpx
+        empty = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"")))
+        with patch.object(server, "_cli", return_value=empty):
+            with pytest.raises(ValueError, match="respuesta vacía"):
+                await server._json("/api/data/dayfile")
+
+    @pytest.mark.asyncio
+    async def test_mysql_table_reports_an_empty_answer_as_an_error(self, monkeypatch):
+        monkeypatch.setenv("ENABLE_WRITE_TOOLS", "true")
+        with patch.object(server, "_post", new_callable=AsyncMock, return_value=""):
+            res = await server.mysql_table("create", "monthly")
+        assert res.startswith("ERROR") and "sin contenido" in res

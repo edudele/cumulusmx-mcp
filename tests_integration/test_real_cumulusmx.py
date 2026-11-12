@@ -382,7 +382,7 @@ def perturb(node, path=()):
     """Primer texto 'seguro' del JSON (no contraseñas ni credenciales) -> (ruta, valor nuevo)."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if isinstance(value, str) and value and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr", key, re.I):
+            if isinstance(value, str) and value and not re.search(r"pass|secret|token|key|user|email|url|path|file|addr|date|time|day|month|year", key, re.I):
                 return path + (key,), value + "-ci"
             found = perturb(value, path + (key,))
             if found:
@@ -522,6 +522,7 @@ async def test_tools_that_need_external_services_fail_cleanly(client, tool):
     text = text_of(result)
     assert text.strip(), f"{tool}: sin respuesta"
     assert "Traceback" not in text, text[:500]
+    assert failed(result) or text.startswith("ERROR") or "error" in text.lower() or "{" in text, f"{tool}: respuesta poco clara: {text[:300]}"
 
 
 async def test_audit_log_recorded_the_writes(client):

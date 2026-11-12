@@ -77,7 +77,10 @@ jobs:
           Latitude=40.4
           Longitude=-3.7
           Altitude=650
+          StartDate=__START__
           EOF
+          # CumulusMX responde vacío a /api/data/dayfile si el inicio de registros es HOY (instalación recién estrenada)
+          sed -i "s/__START__/$(date -u -d '-410 days' +%Y-%m-%d)/" Cumulus.ini
           sed -i 's/^          //' Cumulus.ini
           cat Cumulus.ini
 
@@ -141,10 +144,12 @@ jobs:
             cmx-dir.txt
             seed.json
 
-      - name: Diagnostics (always)
+      - name: Summary of failures (always)
         if: always()
         run: |
-          tail -80 cmx.log || true
-          d="$(cat cmx-dir.txt 2>/dev/null || echo cmx)"
-          ls -la "$d" | head -40 || true
-          tail -60 "$d"/MXdiags/*.txt 2>/dev/null | tail -120 || true
+          echo "=== fallos (una línea por test)"
+          grep -E "^(FAILED|ERROR) " integration-report.txt | cut -c1-380 | head -80 || true
+          echo "=== motivos (líneas E del informe)"
+          grep -E "^E  " integration-report.txt | cut -c1-260 | head -120 || true
+          echo "=== resultado"; tail -2 integration-report.txt || true
+          echo "=== servidor"; tail -15 cmx.log || true
