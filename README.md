@@ -6,6 +6,8 @@
 
 MCP server that exposes a [CumulusMX](https://cumuluswiki.org/a/CumulusMX) weather station to any LLM via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
+**Community:** discussion, questions and feedback in the [Cumulus Support forum thread](https://cumulus.hosiene.co.uk/viewtopic.php?t=24535) (3rd Party Tools), or open a [GitHub issue](https://github.com/edudele/cumulusmx-mcp/issues).
+
 Built with [FastMCP](https://github.com/jlowin/fastmcp) and deployed as a Docker container. Designed to sit behind a reverse proxy (e.g. [Pangolin](https://github.com/fosrl/pangolin)) so your station is never exposed directly.
 
 ---
